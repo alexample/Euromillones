@@ -1,0 +1,10 @@
+name: Diagnostico API
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for u in "https://euromillions.api.pedromealha.dev/v1/draws?year=2026" "https://euromillions.api.pedromealha.dev/v1/draws" "https://euromillions.api.pedromealha.dev/" "https://euromillions.staging.api.pedromealha.dev/v1/draws?year=2026"; do
+            echo "=== $u"; curl -sS -m 20 -o /tmp/b -w "HTTP %{http_code}\n" "$u" || true; head -c 400 /tmp/b; echo
+          done
