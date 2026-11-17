@@ -6,7 +6,7 @@ jobs:
     steps:
       - run: |
           UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36"
-          curl -sSL -m 25 -A "$UA" -o /tmp/b "https://www.euro-millions.com/results-history-2026"
+          curl -sSL --retry 5 --retry-all-errors --retry-delay 5 -m 40 -A "$UA" -o /tmp/b "https://www.euro-millions.com/results-history-2026"
           python3 - <<'P'
           s=open('/tmp/b',encoding='utf-8').read()
           i=s.find('class="ball')
