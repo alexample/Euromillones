@@ -5,6 +5,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          for u in "https://euromillions.api.pedromealha.dev/v1/draws?year=2026" "https://euromillions.api.pedromealha.dev/v1/draws" "https://euromillions.api.pedromealha.dev/" "https://euromillions.staging.api.pedromealha.dev/v1/draws?year=2026"; do
-            echo "=== $u"; curl -sS -m 20 -o /tmp/b -w "HTTP %{http_code}\n" "$u" || true; head -c 400 /tmp/b; echo
+          UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36"
+          for u in \
+            "https://www.euro-millions.com/results-history-2026" \
+            "https://www.euro-millions.com/results-history-2004" \
+            "https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=EMIL&celebrados=true&fechaInicioInclusiva=20261001&fechaFinInclusiva=20261117" \
+            "https://www.national-lottery.co.uk/results/euromillions/draw-history/csv" \
+            "https://www.lottery.co.uk/euromillions/results/archive-2026" \
+            "https://www.euromillones.com.es/historico/resultados-euromillones-2026.html" ; do
+            echo "=== $u"; curl -sSL -m 25 -A "$UA" -o /tmp/b -w "HTTP %{http_code} size %{size_download}\n" "$u" || true
+            grep -o -iE '(ball|resultado|combinacion|numbers?)[^<]{0,80}' /tmp/b 2>/dev/null | head -3; head -c 300 /tmp/b | tr '\n' ' '; echo
           done
