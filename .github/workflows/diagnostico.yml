@@ -6,13 +6,12 @@ jobs:
     steps:
       - run: |
           UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36"
-          for u in \
-            "https://www.euro-millions.com/results-history-2026" \
-            "https://www.euro-millions.com/results-history-2004" \
-            "https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=EMIL&celebrados=true&fechaInicioInclusiva=20261001&fechaFinInclusiva=20261117" \
-            "https://www.national-lottery.co.uk/results/euromillions/draw-history/csv" \
-            "https://www.lottery.co.uk/euromillions/results/archive-2026" \
-            "https://www.euromillones.com.es/historico/resultados-euromillones-2026.html" ; do
-            echo "=== $u"; curl -sSL -m 25 -A "$UA" -o /tmp/b -w "HTTP %{http_code} size %{size_download}\n" "$u" || true
-            grep -o -iE '(ball|resultado|combinacion|numbers?)[^<]{0,80}' /tmp/b 2>/dev/null | head -3; head -c 300 /tmp/b | tr '\n' ' '; echo
-          done
+          curl -sSL -m 25 -A "$UA" -o /tmp/b "https://www.euro-millions.com/results-history-2026"
+          python3 - <<'P'
+          s=open('/tmp/b',encoding='utf-8').read()
+          i=s.find('class="ball')
+          print("FIRST BALL AT",i)
+          print(s[i-1500:i+1500])
+          import re
+          print("COUNT balls", len(re.findall(r'class="ball', s)), "stars", len(re.findall(r'lucky-star', s)))
+          P
