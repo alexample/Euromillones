@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,9 +24,19 @@ jobs:
           gradle-version: "8.14.3"
 
       - name: Compilar APK
-        run: gradle assembleDebug --no-daemon
+        run: |
+          gradle assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk Euromillones.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: euromillones-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: Euromillones.apk
+
+      - name: Publicar en Releases (descarga directa desde el móvil)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ultima
+          name: Euromillones (última versión)
+          make_latest: true
+          files: Euromillones.apk
