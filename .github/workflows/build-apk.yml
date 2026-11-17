@@ -3,6 +3,10 @@ name: Compilar APK
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - "data/**"
+      - "scripts/**"
+      - "README.md"
   workflow_dispatch:
 
 permissions:
