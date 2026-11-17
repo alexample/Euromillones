@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.euromillones.app.ui.screens.MasksScreen
 import com.euromillones.app.ui.screens.ResultsScreen
 import com.euromillones.app.ui.screens.SearchScreen
 import com.euromillones.app.ui.theme.EuroTheme
@@ -44,6 +46,7 @@ import com.euromillones.app.ui.theme.EuroTheme
 enum class AppModule(val title: String, val icon: ImageVector) {
     RESULTADOS("Resultados", Icons.Filled.Home),
     BUSCAR("Buscar", Icons.Filled.Search),
+    MASCARAS("Máscaras", Icons.Filled.Face),
 }
 
 class MainActivity : ComponentActivity() {
@@ -116,6 +119,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                 onClear = vm::clearQuery,
                 modifier = mod,
             )
+            AppModule.MASCARAS -> MasksScreen(state.draws, mod)
         }
     }
 }
