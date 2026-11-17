@@ -39,7 +39,9 @@ import androidx.compose.ui.unit.dp
 import com.euromillones.app.data.Draw
 import com.euromillones.app.data.MatchMode
 import com.euromillones.app.data.SearchQuery
+import com.euromillones.app.data.hits
 import com.euromillones.app.data.search
+import com.euromillones.app.ui.theme.HitGreen
 import com.euromillones.app.ui.components.Ball
 import com.euromillones.app.ui.components.DrawCard
 import java.time.Instant
@@ -60,7 +62,17 @@ fun SearchScreen(
     modifier: Modifier = Modifier,
 ) {
     var picking by remember { mutableStateOf<DateField?>(null) }
-    val results = remember(draws, query) { if (query.isEmpty) emptyList() else draws.search(query) }
+    // Orden: más aciertos primero; a igualdad, más números acertados y luego el más reciente
+    val results = remember(draws, query) {
+        if (query.isEmpty) emptyList()
+        else draws.search(query).sortedWith(
+            compareByDescending<Draw> { it.hits(query) }
+                .thenByDescending { d -> d.numbers.count { it in query.numbers } }
+                .thenByDescending { it.date }
+        )
+    }
+    val groups = remember(results, query) { results.groupBy { it.hits(query) } }
+    val hasNumberFilter = query.numbers.isNotEmpty() || query.stars.isNotEmpty()
 
     LazyColumn(
         modifier = modifier,
@@ -136,8 +148,21 @@ fun SearchScreen(
             item { Text("Elige fechas y/o números para buscar.", style = MaterialTheme.typography.bodyMedium) }
         } else {
             item { SectionTitle("${results.size} sorteos encontrados") }
-            items(results, key = { it.date.toString() }) { draw ->
-                DrawCard(draw, highlightNumbers = query.numbers, highlightStars = query.stars)
+            groups.forEach { (hits, list) ->
+                if (hasNumberFilter) {
+                    item(key = "h$hits") {
+                        Text(
+                            "${if (hits == 1) "1 acierto" else "$hits aciertos"} · ${list.size} sorteos",
+                            color = HitGreen,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                }
+                items(list, key = { it.date.toString() }) { draw ->
+                    DrawCard(draw, highlightNumbers = query.numbers, highlightStars = query.stars)
+                }
             }
         }
     }
