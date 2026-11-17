@@ -10,10 +10,15 @@ móvil para usarlos sin conexión y permite buscarlos.
 | **Buscar** | Filtro por rango de fechas (o un día concreto) y por números/estrellas, en modo **Alguno** (sale al menos uno) o **Todos** (salen todos en el mismo sorteo). Los aciertos se resaltan en verde. |
 
 ## Origen de los datos
-API pública y gratuita: `https://euromillions.api.pedromealha.dev/v1/draws?year=AAAA`
-(se actualiza automáticamente los martes y viernes tras cada sorteo).
-La primera vez se descargan todos los años; luego solo el año en curso.
+Base de datos propia: `data/draws.json` en este repositorio (todos los sorteos desde 2004).
+La tarea **Actualizar sorteos** (`.github/workflows/actualizar-sorteos.yml`) la rellena
+los martes y viernes por la noche, tras cada sorteo, leyendo el histórico de euro-millions.com
+(`scripts/update_draws.py`). Se puede lanzar a mano desde *Actions → Actualizar sorteos → Run workflow*.
+
+La app descarga ese fichero y lo guarda en el móvil, así funciona también sin conexión.
 Botón ⟳ arriba a la derecha para actualizar a mano.
+
+**APK directo:** https://github.com/alexample/Euromillones/releases/download/ultima/Euromillones.apk
 
 ## Cómo obtener el APK
 

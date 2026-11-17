@@ -99,8 +99,8 @@ fun DrawCard(
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.labelLarge,
                     )
-                } else if (draw.hasWinner == true) {
-                    Text("¡Bote repartido!", color = HitGreen, style = MaterialTheme.typography.labelMedium)
+                } else if (draw.jackpot != null) {
+                    Text("Bote ${draw.jackpot}", style = MaterialTheme.typography.labelMedium)
                 }
             }
             Spacer(Modifier.size(8.dp))

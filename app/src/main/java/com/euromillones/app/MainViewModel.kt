@@ -43,7 +43,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
             try {
-                val all = repo.refresh(_state.value.draws) { p ->
+                val all = repo.refresh { p ->
                     _state.update { s -> s.copy(progress = p) }
                 }
                 _state.update { it.copy(draws = all, loading = false, progress = null) }

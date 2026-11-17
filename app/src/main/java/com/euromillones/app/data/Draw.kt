@@ -9,6 +9,7 @@ data class Draw(
     val numbers: List<Int>,
     val stars: List<Int>,
     val hasWinner: Boolean?,
+    val jackpot: String? = null,
 )
 
 enum class MatchMode { ANY, ALL }

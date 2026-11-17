@@ -12,17 +12,15 @@ import java.net.URL
 import java.time.LocalDate
 
 /**
- * Obtiene los sorteos de la API pública (todos los resultados desde 2004)
+ * Descarga todos los sorteos desde la base de datos del propio repositorio
+ * (data/draws.json, que una tarea de GitHub actualiza tras cada sorteo)
  * y los guarda en el móvil para poder consultarlos sin conexión.
- *
- * La primera vez descarga todos los años; después solo el año en curso,
- * así cada actualización es rápida.
  */
 class DrawRepository(context: Context) {
 
     companion object {
-        const val BASE_URL = "https://euromillions.api.pedromealha.dev"
-        const val FIRST_YEAR = 2004
+        const val DATA_URL =
+            "https://raw.githubusercontent.com/alexample/Euromillones/main/data/draws.json"
     }
 
     private val cacheFile = File(context.filesDir, "draws.json")
@@ -33,51 +31,25 @@ class DrawRepository(context: Context) {
             .sortedByDescending { it.date }
     }
 
-    suspend fun refresh(
-        current: List<Draw>,
-        onProgress: (String) -> Unit,
-    ): List<Draw> = withContext(Dispatchers.IO) {
-        val thisYear = LocalDate.now().year
-        val startYear = if (current.isEmpty()) FIRST_YEAR else current.maxOf { it.date }.year
-        val byDate = current.associateBy { it.date }.toMutableMap()
-
-        for (year in startYear..thisYear) {
-            onProgress("Descargando $year…")
-            val body = httpGet("$BASE_URL/v1/draws?year=$year") ?: continue
-            parseDraws(body).forEach { byDate[it.date] = it }
-            save(byDate.values) // se guarda año a año por si se corta la conexión
-        }
-        byDate.values.sortedByDescending { it.date }
+    suspend fun refresh(onProgress: (String) -> Unit): List<Draw> = withContext(Dispatchers.IO) {
+        onProgress("Descargando resultados…")
+        val body = httpGet("$DATA_URL?t=${System.currentTimeMillis() / 60_000}")
+        val draws = parseDraws(body)
+        if (draws.isEmpty()) throw IOException("los datos recibidos están vacíos")
+        cacheFile.writeText(body)
+        draws.sortedByDescending { it.date }
     }
 
-    private fun save(draws: Collection<Draw>) {
-        val arr = JSONArray()
-        draws.forEach { d ->
-            arr.put(
-                JSONObject()
-                    .put("draw_id", d.id)
-                    .put("date", d.date.toString())
-                    .put("numbers", JSONArray(d.numbers))
-                    .put("stars", JSONArray(d.stars))
-                    .apply { d.hasWinner?.let { put("has_winner", it) } }
-            )
-        }
-        cacheFile.writeText(arr.toString())
-    }
-
-    /** Devuelve null si el año no tiene sorteos (404). */
-    private fun httpGet(url: String): String? {
+    private fun httpGet(url: String): String {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 30_000
             setRequestProperty("Accept", "application/json")
         }
         try {
-            return when (val code = conn.responseCode) {
-                200 -> conn.inputStream.bufferedReader().use { it.readText() }
-                404 -> null
-                else -> throw IOException("El servidor respondió $code")
-            }
+            val code = conn.responseCode
+            if (code != 200) throw IOException("el servidor respondió $code")
+            return conn.inputStream.bufferedReader().use { it.readText() }
         } finally {
             conn.disconnect()
         }
@@ -106,6 +78,7 @@ internal fun parseDraws(text: String): List<Draw> {
             numbers = numbers,
             stars = stars,
             hasWinner = if (o.has("has_winner")) o.optBoolean("has_winner") else null,
+            jackpot = o.optString("jackpot").takeIf { it.isNotBlank() && it != "null" },
         )
     }
     return out
