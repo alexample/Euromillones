@@ -5,7 +5,7 @@ import java.time.LocalDate
 /**
  * MÁSCARAS (criterio equilibrado)
  *
- * Decenas  → por tramos del número: L 1-17 · M 18-34 · H 35-50   (17/17/16 números)
+ * Decenas  → por la cifra de la decena: L 0-1 · M 2-3 · H 4-5 (19/20/11 números)
  * Unidades → por último dígito:     L 0-2  · M 3-6   · H 7-9     (15/20/15 números)
  * Estrellas→ por valor:             L 1-4  · M 5-8   · H 9-12    (4/4/4)
  *
@@ -21,12 +21,16 @@ enum class MaskKind(
     private val total: Int,
     val picks: Int,
 ) {
-    DECENAS("Decenas", "L 1-17 · M 18-34 · H 35-50", intArrayOf(17, 17, 16), 50, 5),
+    DECENAS("Decenas", "L decena 0-1 (1-19) · M 2-3 (20-39) · H 4-5 (40-50)", intArrayOf(19, 20, 11), 50, 5),
     UNIDADES("Unidades", "L 0-2 · M 3-6 · H 7-9 (último dígito)", intArrayOf(15, 20, 15), 50, 5),
     ESTRELLAS("Estrellas", "L 1-4 · M 5-8 · H 9-12", intArrayOf(4, 4, 4), 12, 2);
 
     fun level(n: Int): Level = when (this) {
-        DECENAS -> if (n <= 17) Level.L else if (n <= 34) Level.M else Level.H
+        DECENAS -> when (n / 10) {
+            0, 1 -> Level.L
+            2, 3 -> Level.M
+            else -> Level.H
+        }
         UNIDADES -> when (n % 10) {
             in 0..2 -> Level.L
             in 3..6 -> Level.M
