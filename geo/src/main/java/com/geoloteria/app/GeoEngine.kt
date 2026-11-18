@@ -41,9 +41,20 @@ data class GeoState(
     val expectedRate: Double? = null,
     val historySize: Int = 0,   // números guardados (para exportar)
     val message: String? = null,
+    // Avisos con filtro
+    val watchNumbers: List<String> = emptyList(),   // 5 cifras = número exacto; menos = terminación
+    val watchTowns: List<String> = emptyList(),     // nombre de la población
+    val alerts: List<Alert> = emptyList(),
+    val stopOnAlert: Boolean = false,
 )
 
+/** Un aviso que ha saltado: el número, el motivo y cuándo. */
+data class Alert(val draw: Draw, val reason: String, val time: LocalDateTime)
+
+const val ALERTS_MAX = 300
+
 const val HISTORY_MAX = 20_000
+private const val ALERT_CHANNEL = "avisos"
 const val HITS_MAX = 500
 val SPEEDS = listOf(1, 5, 20, 100)
 
@@ -73,7 +84,18 @@ object GeoEngine {
     fun init(context: Context) {
         if (::app.isInitialized) return
         app = context.applicationContext
-        _state.update { it.copy(radius = RadiusConfig.load(app)) }
+        val prefs = app.getSharedPreferences("geoloteria", Context.MODE_PRIVATE)
+        _state.update {
+            it.copy(
+                radius = RadiusConfig.load(app),
+                watchNumbers = prefs.getString("avisos_numeros", "").orEmpty().split("|").filter { x -> x.isNotBlank() },
+                watchTowns = prefs.getString("avisos_poblaciones", "").orEmpty().split("|").filter { x -> x.isNotBlank() },
+                stopOnAlert = prefs.getBoolean("avisos_parar", false),
+            )
+        }
+        val ch = android.app.NotificationChannel(ALERT_CHANNEL, "Avisos de número o población",
+            android.app.NotificationManager.IMPORTANCE_HIGH)
+        app.getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(ch)
         scope.launch {
             val g = Geo(app)
             geo = g
@@ -130,7 +152,7 @@ object GeoEngine {
     fun clear() {
         synchronized(history) { history.clear() }
         _state.update {
-            it.copy(last = null, recent = emptyList(), hits = emptyList(), historySize = 0, total = 0, hitCount = 0)
+            it.copy(last = null, recent = emptyList(), hits = emptyList(), alerts = emptyList(), historySize = 0, total = 0, hitCount = 0)
         }
         dirty = true
         saveAsync()
@@ -159,6 +181,97 @@ object GeoEngine {
             vibrate()
             if (_state.value.stopOnHit) stop()
         }
+        checkAlerts(d)
+    }
+
+    // ---------------- Avisos con filtro ----------------
+
+    /** Motivo del aviso si el número o la población coinciden con algún filtro; null si no. */
+    private fun alertReason(d: Draw): String? {
+        val s = _state.value
+        s.watchNumbers.firstOrNull { w -> if (w.length == 5) d.number == w else d.number.endsWith(w) }?.let { w ->
+            return if (w.length == 5) "Ha salido el número $w" else "Número terminado en $w"
+        }
+        val town = norm(d.nearest.name)
+        s.watchTowns.firstOrNull { norm(it) == town }?.let { t ->
+            return "Ha salido en $t" + if (d.isHit) " (en el núcleo urbano)" else " (fuera del núcleo)"
+        }
+        return null
+    }
+
+    private fun checkAlerts(d: Draw) {
+        val reason = alertReason(d) ?: return
+        _state.update { it.copy(alerts = (listOf(Alert(d, reason, LocalDateTime.now())) + it.alerts).take(ALERTS_MAX)) }
+        notifyAlert(d, reason)
+        if (_state.value.stopOnAlert) stop()
+    }
+
+    private fun notifyAlert(d: Draw, reason: String) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(app, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        val pi = android.app.PendingIntent.getActivity(
+            app, 0,
+            android.content.Intent(app, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = androidx.core.app.NotificationCompat.Builder(app, ALERT_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("$reason · ${d.number}")
+            .setContentText(
+                "${d.nearest.name} (${d.nearest.region}) a ${"%.2f".format(Locale.forLanguageTag("es-ES"), d.distanceKm)} km" +
+                    if (d.isHit) " · en núcleo urbano" else "",
+            )
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        androidx.core.app.NotificationManagerCompat.from(app).notify((d.id % Int.MAX_VALUE).toInt() + 1000, n)
+    }
+
+    private fun saveWatch() {
+        val s = _state.value
+        app.getSharedPreferences("geoloteria", Context.MODE_PRIVATE).edit()
+            .putString("avisos_numeros", s.watchNumbers.joinToString("|"))
+            .putString("avisos_poblaciones", s.watchTowns.joinToString("|"))
+            .putBoolean("avisos_parar", s.stopOnAlert)
+            .apply()
+    }
+
+    /** Añade un número (1 a 5 cifras). Devuelve un mensaje de error o null si se añadió. */
+    fun addWatchNumber(raw: String): String? {
+        val n = raw.trim()
+        if (n.isEmpty() || n.length > 5 || !n.all { it.isDigit() }) return "Escribe entre 1 y 5 cifras"
+        if (n in _state.value.watchNumbers) return null
+        _state.update { it.copy(watchNumbers = it.watchNumbers + n) }
+        saveWatch()
+        return null
+    }
+
+    /** Añade una población; se acepta solo si existe en la lista de núcleos. */
+    fun addWatchTown(raw: String): String? {
+        val g = geo ?: return "Cargando datos…"
+        val match = g.nucleos.firstOrNull { norm(it.name) == norm(raw) } ?: return "No encuentro esa población"
+        if (_state.value.watchTowns.any { norm(it) == norm(match.name) }) return null
+        _state.update { it.copy(watchTowns = it.watchTowns + match.name) }
+        saveWatch()
+        return null
+    }
+
+    fun removeWatchNumber(n: String) { _state.update { it.copy(watchNumbers = it.watchNumbers - n) }; saveWatch() }
+    fun removeWatchTown(t: String) { _state.update { it.copy(watchTowns = it.watchTowns - t) }; saveWatch() }
+    fun setStopOnAlert(v: Boolean) { _state.update { it.copy(stopOnAlert = v) }; saveWatch() }
+    fun clearAlerts() { _state.update { it.copy(alerts = emptyList()) }; dirty = true }
+
+    /** Sugerencias de poblaciones mientras se escribe (por población, de mayor a menor). */
+    fun suggestTowns(query: String, limit: Int = 6): List<Nucleo> {
+        val g = geo ?: return emptyList()
+        val q = norm(query)
+        if (q.length < 2) return emptyList()
+        return g.nucleos.asSequence().filter { norm(it.name).contains(q) }
+            .sortedWith(compareByDescending<Nucleo> { norm(it.name).startsWith(q) }.thenByDescending { it.population })
+            .take(limit).toList()
     }
 
     /** Sin notificaciones: solo una vibración corta (como mucho una cada 2 s). */
@@ -231,6 +344,11 @@ object GeoEngine {
             line('H', h.draw)
             sb.append(';').append(h.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()).append('\n')
         }
+        s.alerts.forEach { a ->
+            line('A', a.draw)
+            sb.append(';').append(a.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
+                .append(';').append(a.reason.replace(";", ",").replace("\n", " ")).append('\n')
+        }
         synchronized(history) { history.toList() }.forEach { line('D', it); sb.append('\n') }
         val tmp = File(app.filesDir, "geoloteria.tmp")
         tmp.writeText(sb.toString())
@@ -242,6 +360,7 @@ object GeoEngine {
         if (!f.exists()) return
         runCatching {
             val hits = ArrayList<Hit>()
+            val alerts = ArrayList<Alert>()
             val hist = ArrayList<Draw>()
             var total = 0L
             var hitCount = 0L
@@ -253,11 +372,16 @@ object GeoEngine {
                         hitCount = p.getOrNull(2)?.toLongOrNull() ?: 0
                         nextId = p.getOrNull(3)?.toLongOrNull() ?: 1
                     }
-                    "H", "D" -> {
+                    "H", "D", "A" -> {
                         if (p.size < 8) return@forEachLine
                         val n = g.nucleos.getOrNull(p[4].toInt()) ?: return@forEachLine
                         val d = Draw(p[7].toLong(), p[1], p[2].toDouble(), p[3].toDouble(), n, p[5].toDouble(), p[6].toDouble())
-                        if (p[0] == "H") {
+                        if (p[0] == "A") {
+                            val t = p.getOrNull(8)?.toLongOrNull()?.let {
+                                LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault())
+                            } ?: LocalDateTime.now()
+                            alerts += Alert(d, p.getOrNull(9) ?: "Aviso", t)
+                        } else if (p[0] == "H") {
                             val t = p.getOrNull(8)?.toLongOrNull()?.let {
                                 LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault())
                             } ?: LocalDateTime.now()
@@ -275,6 +399,7 @@ object GeoEngine {
             _state.update {
                 it.copy(
                     hits = hits,
+                    alerts = alerts,
                     recent = hist.take(50),
                     last = hist.firstOrNull(),
                     total = total,
@@ -308,6 +433,8 @@ object GeoEngine {
                         listOf(
                             "Aciertos" to listOf(header + "Fecha y hora") + s.hits.map { h -> row(h.draw) + h.time.format(TIME) },
                             "Generados" to listOf(header) + hist.map { row(it) },
+                            "Avisos" to listOf(listOf("Motivo") + header + "Fecha y hora") +
+                                s.alerts.map { a -> listOf<Any?>(a.reason) + row(a.draw) + a.time.format(TIME) },
                             "Radios" to config,
                         ),
                     )

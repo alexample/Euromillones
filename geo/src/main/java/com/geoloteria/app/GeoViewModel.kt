@@ -25,4 +25,11 @@ class GeoViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissMessage() = GeoEngine.dismissMessage()
     fun exportExcel(uri: Uri) = GeoEngine.exportExcel(uri)
     fun importExcel(uri: Uri) = GeoEngine.importExcel(uri)
+    fun addWatchNumber(n: String) = GeoEngine.addWatchNumber(n)
+    fun addWatchTown(t: String) = GeoEngine.addWatchTown(t)
+    fun removeWatchNumber(n: String) = GeoEngine.removeWatchNumber(n)
+    fun removeWatchTown(t: String) = GeoEngine.removeWatchTown(t)
+    fun setStopOnAlert(v: Boolean) = GeoEngine.setStopOnAlert(v)
+    fun clearAlerts() = GeoEngine.clearAlerts()
+    fun suggestTowns(q: String) = GeoEngine.suggestTowns(q)
 }

@@ -14,6 +14,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -125,6 +131,7 @@ fun App(vm: GeoViewModel = viewModel()) {
         uri?.let(vm::importExcel)
     }
     var showRadius by rememberSaveable { mutableStateOf(false) }
+    var showWatch by rememberSaveable { mutableStateOf(true) }
 
     // Al pulsar un número: se copia y se abre el buscador oficial de administraciones
     val clipboard = LocalClipboardManager.current
@@ -291,6 +298,17 @@ fun App(vm: GeoViewModel = viewModel()) {
                     Switch(checked = s.vibrate, onCheckedChange = vm::setVibrate)
                     Text("  Vibrar al encontrar uno", style = MaterialTheme.typography.bodySmall)
                 }
+            }
+
+            // ---------- Avisos con filtro ----------
+            item {
+                WatchCard(
+                    s = s,
+                    vm = vm,
+                    expanded = showWatch,
+                    onToggle = { showWatch = !showWatch },
+                    onOpen = { selected = it },
+                )
             }
 
             // ---------- Aviso de importar / exportar ----------
@@ -487,6 +505,133 @@ fun App(vm: GeoViewModel = viewModel()) {
                 TextButton(onClick = {}) {
                     Text("Datos: contorno Natural Earth · poblaciones GeoNames", style = MaterialTheme.typography.labelSmall)
                 }
+            }
+        }
+    }
+}
+
+/** Avisos: números o poblaciones a vigilar, y la lista de avisos que han saltado. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WatchCard(s: GeoState, vm: GeoViewModel, expanded: Boolean, onToggle: () -> Unit, onOpen: (Draw) -> Unit) {
+    var numText by rememberSaveable { mutableStateOf("") }
+    var townText by rememberSaveable { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    val suggestions = remember(townText, s.ready) { vm.suggestTowns(townText) }
+    val active = s.watchNumbers.size + s.watchTowns.size
+
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF7E6))) {
+        Column(Modifier.padding(12.dp)) {
+            Row(Modifier.fillMaxWidth().clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Avisos · $active filtro${if (active == 1) "" else "s"} · ${s.alerts.size} recibido${if (s.alerts.size == 1) "" else "s"}",
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(if (expanded) "▲" else "▼")
+            }
+            if (!expanded) return@Column
+            Text(
+                "Te aviso con una notificación cuando salga un número o una población que indiques, " +
+                    "esté o no en el núcleo urbano.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+
+            // Número
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = numText,
+                    onValueChange = { numText = it.filter { c -> c.isDigit() }.take(5); error = null },
+                    label = { Text("Número o terminación") },
+                    placeholder = { Text("48213 o 13") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    error = vm.addWatchNumber(numText)
+                    if (error == null) numText = ""
+                }) { Text("Añadir") }
+            }
+            // Población
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = townText,
+                    onValueChange = { townText = it; error = null },
+                    label = { Text("Población") },
+                    placeholder = { Text("Toledo, Sitges…") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    error = vm.addWatchTown(townText)
+                    if (error == null) townText = ""
+                }) { Text("Añadir") }
+            }
+            if (suggestions.isNotEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    suggestions.forEach { n ->
+                        AssistChip(
+                            onClick = {
+                                error = vm.addWatchTown(n.name)
+                                if (error == null) townText = ""
+                            },
+                            label = { Text("${n.name} (${n.region})", style = MaterialTheme.typography.labelSmall) },
+                        )
+                    }
+                }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+
+            // Filtros activos
+            if (active > 0) {
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    s.watchNumbers.forEach { n ->
+                        InputChip(
+                            selected = true,
+                            onClick = { vm.removeWatchNumber(n) },
+                            label = { Text(if (n.length == 5) "Nº $n" else "Termina en $n") },
+                            trailingIcon = { Icon(Icons.Filled.Clear, contentDescription = "Quitar") },
+                        )
+                    }
+                    s.watchTowns.forEach { t ->
+                        InputChip(
+                            selected = true,
+                            onClick = { vm.removeWatchTown(t) },
+                            label = { Text(t) },
+                            trailingIcon = { Icon(Icons.Filled.Clear, contentDescription = "Quitar") },
+                        )
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = s.stopOnAlert, onCheckedChange = vm::setStopOnAlert)
+                Text("  Parar el automático cuando salte un aviso", style = MaterialTheme.typography.bodySmall)
+            }
+
+            // Avisos recibidos
+            if (s.alerts.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Avisos recibidos", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = vm::clearAlerts) { Text("Borrar") }
+                }
+                s.alerts.take(30).forEach { a ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onOpen(a.draw) }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(a.draw.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.width(64.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(a.reason, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            Text("${a.draw.nearest.name} · a ${km(a.draw.distanceKm)}", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Text(a.time.format(timeFmt), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                if (s.alerts.size > 30) Text("… y ${s.alerts.size - 30} más (se exportan a Excel)", style = MaterialTheme.typography.labelSmall)
             }
         }
     }
