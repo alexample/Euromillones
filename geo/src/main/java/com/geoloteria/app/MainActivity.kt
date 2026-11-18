@@ -23,13 +23,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -40,6 +46,10 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import java.text.Normalizer
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -77,6 +88,9 @@ private fun thousands(x: Long) = String.format(es, "%,d", x)
 fun App(vm: GeoViewModel = viewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
+    var query by rememberSaveable { mutableStateOf("") }
+    val hits = remember(s.hits, query) { s.hits.filter { matches(it.draw, query) } }
+    val recent = remember(s.recent, query) { s.recent.filter { matches(it, query) } }
 
     // Permiso de notificaciones (Android 13+)
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -190,12 +204,41 @@ fun App(vm: GeoViewModel = viewModel()) {
                 )
             }
 
+            // ---------- Búsqueda ----------
+            item {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Clear, contentDescription = "Borrar búsqueda") }
+                        }
+                    },
+                    label = { Text("Buscar por número o ciudad") },
+                    placeholder = { Text("Ej.: 48213, 482, Toledo, Galicia…") },
+                )
+                if (query.isNotBlank()) {
+                    Text(
+                        if (query.trim().all { it.isDigit() }) "Números que contienen «${query.trim()}»"
+                        else "Ciudad o comunidad que contiene «${query.trim()}»",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
             // ---------- Aciertos ----------
             item {
-                Text("Aciertos · ${s.hits.size}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 8.dp))
+                Text(
+                    "Aciertos · " + if (query.isBlank()) "${s.hits.size}" else "${hits.size} de ${s.hits.size}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
             }
-            items(s.hits, key = { "h-${it.draw.id}" }) { h ->
+            items(hits, key = { "h-${it.draw.id}" }) { h ->
                 Card(Modifier.fillMaxWidth().clickable { openMap(h.draw) },
                     colors = CardDefaults.cardColors(containerColor = HitGreen.copy(alpha = 0.10f))) {
                     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -214,10 +257,14 @@ fun App(vm: GeoViewModel = viewModel()) {
 
             // ---------- Últimos generados ----------
             item {
-                Text("Últimos generados", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 8.dp))
+                Text(
+                    "Últimos generados" + if (query.isBlank()) "" else " · ${recent.size} de ${s.recent.size}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
             }
-            items(s.recent, key = { "r-${it.id}" }) { d ->
+            items(recent, key = { "r-${it.id}" }) { d ->
                 Row(Modifier.fillMaxWidth().clickable { openMap(d) }.padding(vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Text(d.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
@@ -244,6 +291,19 @@ fun App(vm: GeoViewModel = viewModel()) {
             }
         }
     }
+}
+
+/** Quita tildes y pasa a minúsculas para comparar ("Ávila" = "avila"). */
+private fun norm(x: String): String =
+    Normalizer.normalize(x, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").lowercase(es)
+
+/** Solo dígitos → busca en el número; si no → en la ciudad (núcleo más cercano) o la comunidad. */
+private fun matches(d: Draw, query: String): Boolean {
+    val q = query.trim()
+    if (q.isEmpty()) return true
+    if (q.all { it.isDigit() }) return d.number.contains(q)
+    val nq = norm(q)
+    return norm(d.nearest.name).contains(nq) || norm(d.nearest.region).contains(nq)
 }
 
 @Composable

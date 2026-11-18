@@ -9,6 +9,16 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
+/** Nombres de comunidades autónomas en español (GeoNames los da en inglés). */
+private val REGIONES = mapOf(
+    "Andalusia" to "Andalucía", "Castille and León" to "Castilla y León", "Catalonia" to "Cataluña",
+    "Castille-La Mancha" to "Castilla-La Mancha", "Valencia" to "Comunidad Valenciana", "Madrid" to "Comunidad de Madrid",
+    "Aragon" to "Aragón", "Canary Islands" to "Canarias", "Basque Country" to "País Vasco",
+    "Balearic Islands" to "Islas Baleares", "Navarre" to "Navarra", "Murcia" to "Región de Murcia",
+)
+
+fun regionEs(r: String): String = REGIONES[r] ?: r
+
 /** Población española (núcleo de más de 500 habitantes, datos de GeoNames). */
 data class Nucleo(val name: String, val lat: Double, val lon: Double, val population: Int, val region: String) {
     /** Radio que se considera casco urbano: crece con la población (0,5 km → 5 km). */
@@ -61,7 +71,7 @@ class Geo(context: Context) {
             lines.mapNotNull { line ->
                 val p = line.split(";")
                 if (p.size < 4) null
-                else Nucleo(p[0], p[1].toDouble(), p[2].toDouble(), p[3].toIntOrNull() ?: 0, p.getOrElse(4) { "" })
+                else Nucleo(p[0], p[1].toDouble(), p[2].toDouble(), p[3].toIntOrNull() ?: 0, regionEs(p.getOrElse(4) { "" }))
             }.toList()
         }
     }
