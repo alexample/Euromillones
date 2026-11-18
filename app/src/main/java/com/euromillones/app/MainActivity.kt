@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,9 +40,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.euromillones.app.data.DEFAULT_HOT_WINDOW
+import com.euromillones.app.data.DEFAULT_NAVIDAD_WINDOW
 import com.euromillones.app.data.GenTarget
 import com.euromillones.app.ui.screens.GeneratorScreen
 import com.euromillones.app.ui.screens.MasksScreen
+import com.euromillones.app.ui.screens.NavidadGeneratorScreen
+import com.euromillones.app.ui.screens.NavidadScreen
 import com.euromillones.app.ui.screens.ResultsScreen
 import com.euromillones.app.ui.screens.SearchScreen
 import com.euromillones.app.ui.screens.StatsScreen
@@ -56,6 +60,7 @@ enum class AppModule(val title: String, val icon: ImageVector) {
     BUSCAR("Buscar", Icons.Filled.Search),
     MASCARAS("Máscaras", Icons.Filled.Face),
     ESTADISTICAS("Estadística", Icons.Filled.Info),
+    NAVIDAD("Navidad", Icons.Filled.Star),
 }
 
 class MainActivity : ComponentActivity() {
@@ -77,17 +82,30 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
     // Pantalla de generador abierta (máscara codificada) o null
     var gen by rememberSaveable { mutableStateOf<String?>(null) }
     var hotWindow by rememberSaveable { mutableIntStateOf(DEFAULT_HOT_WINDOW) }
+    val gordos by vm.gordos.collectAsStateWithLifecycle()
+    var navWindow by rememberSaveable { mutableIntStateOf(DEFAULT_NAVIDAD_WINDOW) }
+    // Generador de Navidad abierto ("LMH|CTF") o null
+    var navGen by rememberSaveable { mutableStateOf<String?>(null) }
     val openMask: (GenTarget) -> Unit = { gen = it.encode() }
-    BackHandler(enabled = gen != null) { gen = null }
+    BackHandler(enabled = gen != null || navGen != null) { gen = null; navGen = null }
 
     Scaffold(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text(if (gen != null) "Generar combinaciones" else "Euromillones · ${module.title}") },
+                    title = {
+                        Text(
+                            when {
+                                gen != null -> "Generar combinaciones"
+                                navGen != null -> "Generar números de Navidad"
+                                module == AppModule.NAVIDAD -> "Lotería de Navidad"
+                                else -> "Euromillones · ${module.title}"
+                            },
+                        )
+                    },
                     navigationIcon = {
-                        if (gen != null) {
-                            IconButton(onClick = { gen = null }) {
+                        if (gen != null || navGen != null) {
+                            IconButton(onClick = { gen = null; navGen = null }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
                             }
                         }
@@ -121,7 +139,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                 AppModule.entries.forEach { m ->
                     NavigationBarItem(
                         selected = m == module,
-                        onClick = { module = m; gen = null },
+                        onClick = { module = m; gen = null; navGen = null },
                         icon = { Icon(m.icon, contentDescription = m.title) },
                         label = { Text(m.title) },
                     )
@@ -133,8 +151,11 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
             .fillMaxSize()
             .padding(padding)
         val g = gen
+        val ng = navGen
         if (g != null) {
             GeneratorScreen(GenTarget.decode(g), state.draws, hotWindow, mod)
+        } else if (ng != null) {
+            NavidadGeneratorScreen(ng.substringBefore("|"), ng.substringAfter("|"), gordos, navWindow, mod)
         } else when (module) {
             AppModule.RESULTADOS -> ResultsScreen(state, mod)
             AppModule.BUSCAR -> SearchScreen(
@@ -146,6 +167,13 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
             )
             AppModule.MASCARAS -> MasksScreen(state.draws, hotWindow, { hotWindow = it }, openMask, mod)
             AppModule.ESTADISTICAS -> StatsScreen(state.draws, openMask, mod)
+            AppModule.NAVIDAD -> NavidadScreen(
+                gordos = gordos,
+                window = navWindow,
+                onWindowChange = { navWindow = it },
+                onOpen = { l, c -> navGen = "$l|$c" },
+                modifier = mod,
+            )
         }
     }
 }

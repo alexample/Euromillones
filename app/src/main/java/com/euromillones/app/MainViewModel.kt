@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.euromillones.app.data.Draw
 import com.euromillones.app.data.DrawRepository
+import com.euromillones.app.data.Gordo
+import com.euromillones.app.data.NavidadRepository
 import com.euromillones.app.data.SearchQuery
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +24,11 @@ data class UiState(
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = DrawRepository(app)
+    private val navRepo = NavidadRepository(app)
+
+    // Gordos de la Lotería de Navidad
+    private val _gordos = MutableStateFlow<List<Gordo>>(emptyList())
+    val gordos: StateFlow<List<Gordo>> = _gordos.asStateFlow()
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -34,12 +41,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val cached = repo.loadCache()
             _state.update { it.copy(draws = cached) }
+            _gordos.value = navRepo.load()
             refresh()
         }
     }
 
     fun refresh() {
         if (_state.value.loading) return
+        viewModelScope.launch {
+            runCatching { navRepo.refresh() }.onSuccess { _gordos.value = it }
+        }
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
             try {
