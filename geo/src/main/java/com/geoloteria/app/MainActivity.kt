@@ -160,6 +160,7 @@ fun App(vm: GeoViewModel = viewModel()) {
     }
     var showRadius by rememberSaveable { mutableStateOf(false) }
     var showWatch by rememberSaveable { mutableStateOf(true) }
+    var showRanking by rememberSaveable { mutableStateOf(false) }
 
     // Al pulsar un número: se copia y se abre el buscador oficial de administraciones
     val clipboard = LocalClipboardManager.current
@@ -436,6 +437,16 @@ fun App(vm: GeoViewModel = viewModel()) {
                 )
             }
 
+            // ---------- Ranking ----------
+            item {
+                RankingCard(
+                    total = s.total,
+                    expanded = showRanking,
+                    onToggle = { showRanking = !showRanking },
+                    onSearch = { query = it },
+                )
+            }
+
             // ---------- Búsqueda ----------
             item {
                 OutlinedTextField(
@@ -673,6 +684,91 @@ private fun WatchCard(s: GeoState, vm: GeoViewModel, expanded: Boolean, onToggle
         }
     }
 }
+
+/** Ranking de lo que más ha salido: ciudades, números o comunidades (en todo lo guardado). */
+@Composable
+private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, onSearch: (String) -> Unit) {
+    var kind by rememberSaveable { mutableStateOf(RankKind.CIUDADES) }
+    var hitsOnly by rememberSaveable { mutableStateOf(false) }
+    var limit by rememberSaveable { mutableStateOf(20) }
+    val ranking by produceState<Ranking?>(null, kind, hitsOnly, limit, expanded) {
+        if (!expanded) return@produceState
+        while (true) {
+            value = withContext(Dispatchers.Default) { GeoEngine.ranking(kind, hitsOnly, limit) }
+            delay(5_000)
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp)) {
+            Row(Modifier.fillMaxWidth().clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically) {
+                Text("Ranking: lo que más ha salido", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(if (expanded) "▲" else "▼")
+            }
+            if (!expanded) return@Column
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                RankKind.entries.forEach { k ->
+                    FilterChip(selected = k == kind, onClick = { kind = k; limit = 20 }, label = { Text(k.title) })
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selected = !hitsOnly, onClick = { hitsOnly = false }, label = { Text("Todos") })
+                FilterChip(selected = hitsOnly, onClick = { hitsOnly = true }, label = { Text("Solo en núcleo") })
+            }
+            val r = ranking
+            if (r == null) {
+                Text("Calculando…", style = MaterialTheme.typography.bodySmall)
+                return@Column
+            }
+            if (r.total == 0L) {
+                Text("Aún no hay datos.", style = MaterialTheme.typography.bodySmall)
+                return@Column
+            }
+            val what = when (kind) {
+                RankKind.CIUDADES -> "ciudades distintas"
+                RankKind.NUMEROS -> "números distintos (de 100.000)"
+                RankKind.COMUNIDADES -> "comunidades"
+            }
+            Text(
+                "${thousands(r.total)} ${if (hitsOnly) "aciertos" else "números"} · ${thousands(r.distinct)} $what." +
+                    if (kind == RankKind.NUMEROS) " Por azar, cada número debería salir unas ${num2(r.total / 100_000.0)} veces." else "",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+            r.rows.forEachIndexed { i, row ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onSearch(if (kind == RankKind.CIUDADES || kind == RankKind.COMUNIDADES) row.label else row.key) }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${i + 1}.", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(34.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            row.label,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = if (kind == RankKind.NUMEROS) FontFamily.Monospace else FontFamily.Default,
+                        )
+                        if (row.detail.isNotEmpty()) Text(row.detail, style = MaterialTheme.typography.labelSmall)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("${thousands(row.count)} veces", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                        Text(pct(row.count.toDouble() / r.total), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            Row {
+                if (r.rows.size >= limit && limit < 500) {
+                    TextButton(onClick = { limit = (limit * 2).coerceAtMost(500) }) { Text("Ver más") }
+                }
+                Spacer(Modifier.weight(1f))
+                Text("Toca una fila para buscarla", style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.CenterVertically))
+            }
+        }
+    }
+}
+
+private fun num2(x: Double) = String.format(es, "%.2f", x)
 
 @Composable
 private fun Stat(label: String, value: String) {

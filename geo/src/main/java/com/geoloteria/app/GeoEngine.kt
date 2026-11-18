@@ -48,6 +48,13 @@ data class GeoState(
     val stopOnAlert: Boolean = false,
 )
 
+enum class RankKind(val title: String) { CIUDADES("Ciudades"), NUMEROS("Números"), COMUNIDADES("Comunidades") }
+
+/** Una fila del ranking: nombre, detalle, veces y el texto con el que buscarla. */
+data class RankRow(val label: String, val detail: String, val count: Long, val key: String)
+
+data class Ranking(val total: Long, val distinct: Long, val rows: List<RankRow>)
+
 /** Un aviso que ha saltado: el número, el motivo y cuándo. */
 data class Alert(val draw: Draw, val reason: String, val time: LocalDateTime)
 
@@ -312,6 +319,35 @@ object GeoEngine {
         val count = db.searchCount(query, hitsOnly)
         val page = db.search(query, g.nucleos, hitsOnly, limit).map { it.first }
         return count to page
+    }
+
+    // ---------------- Ranking ----------------
+
+    /**
+     * Lo que más ha salido en TODO lo guardado.
+     * [kind]: ciudades, números o comunidades; [hitsOnly]: solo los que cayeron en núcleo urbano.
+     */
+    fun ranking(kind: RankKind, hitsOnly: Boolean, limit: Int): Ranking {
+        val g = geo ?: return Ranking(0, 0, emptyList())
+        runCatching { flush() }
+        val total = db.count(hitsOnly)
+        val col = when (kind) {
+            RankKind.CIUDADES -> "nuc"
+            RankKind.NUMEROS -> "number"
+            RankKind.COMUNIDADES -> "region_key"
+        }
+        val regionName = g.nucleos.associate { it.regionKey to it.region }
+        val rows = db.top(col, hitsOnly, limit).map { (v, c) ->
+            when (kind) {
+                RankKind.CIUDADES -> {
+                    val n = g.nucleos.getOrNull(v.toIntOrNull() ?: -1)
+                    RankRow(n?.name ?: "?", n?.let { "${it.region} · ${"%,d".format(Locale.forLanguageTag("es-ES"), it.population)} hab." } ?: "", c, v)
+                }
+                RankKind.NUMEROS -> RankRow(v, "", c, v)
+                RankKind.COMUNIDADES -> RankRow(regionName[v] ?: v, "", c, v)
+            }
+        }
+        return Ranking(total, db.distinct(col, hitsOnly), rows)
     }
 
     // ---------------- Radio de acción ----------------
