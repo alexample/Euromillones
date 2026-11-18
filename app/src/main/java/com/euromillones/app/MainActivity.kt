@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +38,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.euromillones.app.ui.screens.MasksScreen
 import com.euromillones.app.ui.screens.ResultsScreen
 import com.euromillones.app.ui.screens.SearchScreen
+import com.euromillones.app.ui.screens.StatsScreen
 import com.euromillones.app.ui.theme.EuroTheme
 
 /**
@@ -47,6 +49,7 @@ enum class AppModule(val title: String, val icon: ImageVector) {
     RESULTADOS("Resultados", Icons.Filled.Home),
     BUSCAR("Buscar", Icons.Filled.Search),
     MASCARAS("Máscaras", Icons.Filled.Face),
+    ESTADISTICAS("Estadística", Icons.Filled.Info),
 }
 
 class MainActivity : ComponentActivity() {
@@ -120,6 +123,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                 modifier = mod,
             )
             AppModule.MASCARAS -> MasksScreen(state.draws, mod)
+            AppModule.ESTADISTICAS -> StatsScreen(state.draws, mod)
         }
     }
 }

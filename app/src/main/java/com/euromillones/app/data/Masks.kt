@@ -99,10 +99,3 @@ fun MaskKind.stats(draws: List<Draw>): List<MaskStat> {
         )
     }.sortedWith(compareByDescending<MaskStat> { it.count }.thenByDescending { it.expected })
 }
-
-private fun comb(n: Int, k: Int): Double {
-    if (k < 0 || k > n) return 0.0
-    var r = 1.0
-    for (i in 1..k) r = r * (n - k + i) / i
-    return r
-}

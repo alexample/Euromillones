@@ -48,7 +48,7 @@ private val LevelL = Color(0xFF0EA5E9)
 private val LevelM = Color(0xFF8B5CF6)
 private val LevelH = Color(0xFFEF4444)
 
-private fun Level.color() = when (this) {
+internal fun Level.color() = when (this) {
     Level.L -> LevelL
     Level.M -> LevelM
     Level.H -> LevelH
@@ -185,7 +185,7 @@ private fun StatRow(s: MaskStat, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun LevelText(text: String, level: Level) {
+internal fun LevelText(text: String, level: Level) {
     Text(text, color = level.color(), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace,
         style = MaterialTheme.typography.bodySmall)
 }
