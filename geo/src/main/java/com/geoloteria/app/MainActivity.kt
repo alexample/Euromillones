@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -53,9 +54,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,7 +71,10 @@ import java.util.Locale
 private val Teal = Color(0xFF0F766E)
 private val HitGreen = Color(0xFF16A34A)
 private val es = Locale.forLanguageTag("es-ES")
-private val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
+private val timeFmt = DateTimeFormatter.ofPattern("dd/MM HH:mm")
+
+/** Página oficial para buscar en qué administración se vende un número. */
+private const val BUSCAR_DECIMO = "https://www.loteriasyapuestas.es/es/buscar-decimo"
 private val FILE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm")
 private const val XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -78,6 +85,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = Teal, onPrimary = Color.White)) { App() }
         }
+    }
+
+    /** Al salir de la app se guarda todo (también se guarda solo cada 15 s). */
+    override fun onStop() {
+        super.onStop()
+        GeoEngine.saveAsync()
     }
 }
 
@@ -108,6 +121,14 @@ fun App(vm: GeoViewModel = viewModel()) {
         uri?.let(vm::importExcel)
     }
     var showRadius by rememberSaveable { mutableStateOf(false) }
+
+    // Al pulsar un número: se copia y se abre el buscador oficial de administraciones
+    val clipboard = LocalClipboardManager.current
+    val findSeller: (String) -> Unit = { number ->
+        clipboard.setText(AnnotatedString(number))
+        Toast.makeText(ctx, "Número $number copiado: pégalo en el buscador", Toast.LENGTH_LONG).show()
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BUSCAR_DECIMO))) }
+    }
 
     val openMap: (Draw) -> Unit = { d ->
         val uri = Uri.parse("geo:${coord(d.lat)},${coord(d.lon)}?q=${coord(d.lat)},${coord(d.lon)}(${Uri.encode(d.number)})")
@@ -150,8 +171,14 @@ fun App(vm: GeoViewModel = viewModel()) {
                             Text("Pulsa «Generar» para empezar", style = MaterialTheme.typography.bodyMedium)
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(d.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.displaySmall)
+                                Text(
+                                    d.number,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.displaySmall,
+                                    textDecoration = TextDecoration.Underline,
+                                    modifier = Modifier.clickable { findSeller(d.number) },
+                                )
                                 Spacer(Modifier.width(12.dp))
                                 Text(
                                     if (d.isHit) "¡EN NÚCLEO\nURBANO!" else "Fuera de\nnúcleo",
@@ -167,7 +194,10 @@ fun App(vm: GeoViewModel = viewModel()) {
                                     "radio ${km(d.radiusKm)}",
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            Text("Toca para verlo en el mapa", style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                "Toca el número para ver dónde lo venden · toca la tarjeta para verlo en el mapa",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
                         }
                     }
                 }
@@ -175,6 +205,13 @@ fun App(vm: GeoViewModel = viewModel()) {
 
             // ---------- Controles ----------
             item {
+                if (s.running) {
+                    Text(
+                        "Generando también en segundo plano: puedes cerrar la app. Para pararlo usa «Parar» aquí o en el aviso.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Teal,
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(enabled = s.ready && !s.running, onClick = vm::generateOne) { Text("Generar uno") }
                     Button(
@@ -194,8 +231,8 @@ fun App(vm: GeoViewModel = viewModel()) {
                     Text("  Parar al encontrar uno", style = MaterialTheme.typography.bodySmall)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = s.notify, onCheckedChange = vm::setNotify)
-                    Text("  Avisar con notificación y vibración", style = MaterialTheme.typography.bodySmall)
+                    Switch(checked = s.vibrate, onCheckedChange = vm::setVibrate)
+                    Text("  Vibrar al encontrar uno", style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -334,8 +371,14 @@ fun App(vm: GeoViewModel = viewModel()) {
                 Card(Modifier.fillMaxWidth().clickable { openMap(h.draw) },
                     colors = CardDefaults.cardColors(containerColor = HitGreen.copy(alpha = 0.10f))) {
                     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(h.draw.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium, modifier = Modifier.width(76.dp))
+                        Text(
+                            h.draw.number,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier.width(76.dp).clickable { findSeller(h.draw.number) },
+                        )
                         Column(Modifier.weight(1f)) {
                             Text("${h.draw.nearest.name} · ${h.draw.nearest.region}", fontWeight = FontWeight.SemiBold,
                                 style = MaterialTheme.typography.bodyMedium)
@@ -359,8 +402,13 @@ fun App(vm: GeoViewModel = viewModel()) {
             items(recent, key = { "r-${it.id}" }) { d ->
                 Row(Modifier.fillMaxWidth().clickable { openMap(d) }.padding(vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Text(d.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.width(64.dp))
+                    Text(
+                        d.number,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.width(64.dp).clickable { findSeller(d.number) },
+                    )
                     Text(
                         "${coord(d.lat)}, ${coord(d.lon)}",
                         fontFamily = FontFamily.Monospace,

@@ -77,6 +77,9 @@ class Geo(context: Context) {
         }
     }
 
+    /** Posición de cada núcleo en la lista (para guardar en el móvil). */
+    val index: Map<Nucleo, Int> by lazy { nucleos.withIndex().associate { it.value to it.index } }
+
     fun inSpain(lon: Double, lat: Double): Boolean = rings.any { inside(lon, lat, it) }
 
     private fun inside(x: Double, y: Double, r: DoubleArray): Boolean {
