@@ -56,10 +56,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import java.text.Normalizer
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -67,6 +68,8 @@ private val Teal = Color(0xFF0F766E)
 private val HitGreen = Color(0xFF16A34A)
 private val es = Locale.forLanguageTag("es-ES")
 private val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
+private val FILE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm")
+private const val XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,6 +100,14 @@ fun App(vm: GeoViewModel = viewModel()) {
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(XLSX_MIME),
+    ) { uri -> uri?.let(vm::exportExcel) }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::importExcel)
+    }
+    var showRadius by rememberSaveable { mutableStateOf(false) }
 
     val openMap: (Draw) -> Unit = { d ->
         val uri = Uri.parse("geo:${coord(d.lat)},${coord(d.lon)}?q=${coord(d.lat)},${coord(d.lon)}(${Uri.encode(d.number)})")
@@ -153,7 +164,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                                 style = MaterialTheme.typography.bodyMedium)
                             Text(
                                 "Más cercano: ${d.nearest.name} (${d.nearest.region}) a ${km(d.distanceKm)} · " +
-                                    "casco urbano ${km(d.nearest.radiusKm)}",
+                                    "radio ${km(d.radiusKm)}",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             Text("Toca para verlo en el mapa", style = MaterialTheme.typography.labelSmall)
@@ -188,6 +199,86 @@ fun App(vm: GeoViewModel = viewModel()) {
                 }
             }
 
+            // ---------- Aviso de importar / exportar ----------
+            s.message?.let { msg ->
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(msg, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                            TextButton(onClick = vm::dismissMessage) { Text("OK") }
+                        }
+                    }
+                }
+            }
+
+            // ---------- Excel ----------
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = s.historySize > 0 || s.hits.isNotEmpty(),
+                        onClick = { exportLauncher.launch("geoloteria_${LocalDateTime.now().format(FILE_FMT)}.xlsx") },
+                    ) { Text("Exportar Excel") }
+                    OutlinedButton(
+                        enabled = s.ready,
+                        onClick = { importLauncher.launch(arrayOf(XLSX_MIME, "application/octet-stream", "*/*")) },
+                    ) { Text("Importar Excel") }
+                }
+                Text(
+                    "Exporta aciertos, todo lo generado (${thousands(s.historySize.toLong())}) y los radios. " +
+                        "Para importar basta con columnas Número, Latitud y Longitud.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            // ---------- Radio de acción ----------
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { showRadius = !showRadius },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Radio de acción según habitantes", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            Text(if (showRadius) "▲" else "▼")
+                        }
+                        if (showRadius) {
+                            Text(
+                                "Distancia al centro del núcleo para que cuente como urbano. 0 km = ese tramo no cuenta.",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(vertical = 4.dp),
+                            )
+                            RadiusConfig.TIER_LABEL.forEachIndexed { i, label ->
+                                val v = s.radius.km[i]
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("$label hab.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                    IconButton(onClick = { vm.setRadius(i, v - RadiusConfig.STEP) }) { Text("−", fontWeight = FontWeight.Bold) }
+                                    Text(
+                                        km(v).replace(",00", ""),
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.width(64.dp),
+                                        textAlign = TextAlign.Center,
+                                    )
+                                    IconButton(onClick = { vm.setRadius(i, v + RadiusConfig.STEP) }) { Text("+", fontWeight = FontWeight.Bold) }
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "Tasa esperada: " + (s.expectedRate?.let { pct(it) } ?: "calculando…"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = vm::resetRadius) { Text("Restablecer") }
+                            }
+                            Text(
+                                "Los cambios se aplican a los números nuevos y a lo que importes.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
+            }
+
             // ---------- Estadísticas ----------
             item {
                 Card(Modifier.fillMaxWidth()) {
@@ -198,7 +289,8 @@ fun App(vm: GeoViewModel = viewModel()) {
                     }
                 }
                 Text(
-                    "Se espera que ~2,7 % de los puntos caigan en un núcleo urbano (el suelo urbano es una parte pequeña de España).",
+                    "Con los radios actuales se espera que caiga en un núcleo urbano el " +
+                        (s.expectedRate?.let { pct(it) } ?: "… (calculando)") + " de los puntos.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
                 )
@@ -292,10 +384,6 @@ fun App(vm: GeoViewModel = viewModel()) {
         }
     }
 }
-
-/** Quita tildes y pasa a minúsculas para comparar ("Ávila" = "avila"). */
-private fun norm(x: String): String =
-    Normalizer.normalize(x, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").lowercase(es)
 
 /** Solo dígitos → busca en el número; si no → en la ciudad (núcleo más cercano) o la comunidad. */
 private fun matches(d: Draw, query: String): Boolean {

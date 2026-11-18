@@ -4,7 +4,6 @@ import android.content.Context
 import org.json.JSONArray
 import kotlin.math.asin
 import kotlin.math.cos
-import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
@@ -20,11 +19,12 @@ private val REGIONES = mapOf(
 fun regionEs(r: String): String = REGIONES[r] ?: r
 
 /** Población española (núcleo de más de 500 habitantes, datos de GeoNames). */
-data class Nucleo(val name: String, val lat: Double, val lon: Double, val population: Int, val region: String) {
-    /** Radio que se considera casco urbano: crece con la población (0,5 km → 5 km). */
-    val radiusKm: Double get() = min(5.0, 0.25 + 0.3 * sqrt(population / 1000.0))
-}
+data class Nucleo(val name: String, val lat: Double, val lon: Double, val population: Int, val region: String)
 
+/**
+ * Un número con su coordenada. [nearest] = el núcleo que "manda" en ese punto: aquel en cuyo radio cae
+ * (si hay varios, el más céntrico respecto a su radio) o, si no cae en ninguno, el más cercano.
+ */
 data class Draw(
     val id: Long,
     val number: String,
@@ -32,8 +32,9 @@ data class Draw(
     val lon: Double,
     val nearest: Nucleo,
     val distanceKm: Double,
+    val radiusKm: Double,
 ) {
-    val isHit: Boolean get() = distanceKm <= nearest.radiusKm
+    val isHit: Boolean get() = radiusKm > 0 && distanceKm <= radiusKm
 }
 
 /**
@@ -102,28 +103,51 @@ class Geo(context: Context) {
         }
     }
 
-    /** Núcleo más cercano y distancia en km (aproximación plana, precisa a estas escalas). */
-    fun nearest(lat: Double, lon: Double): Pair<Nucleo, Double> {
+    /**
+     * Evalúa un punto: busca el núcleo en cuyo radio cae (distancia/radio más pequeño) y, si no cae en
+     * ninguno, el más cercano. Distancias con aproximación plana (precisa a estas escalas).
+     */
+    fun evaluate(id: Long, number: String, lat: Double, lon: Double, cfg: RadiusConfig): Draw {
         val kx = 111.32 * cos(Math.toRadians(lat))
         val ky = 110.57
-        var best = nucleos.first()
-        var bestD2 = Double.MAX_VALUE
+        var nearest = nucleos.first()
+        var nearestD = Double.MAX_VALUE
+        var hit: Nucleo? = null
+        var hitD = 0.0
+        var hitR = 0.0
+        var hitRatio = Double.MAX_VALUE
         for (n in nucleos) {
             val dx = (n.lon - lon) * kx
             val dy = (n.lat - lat) * ky
-            val d2 = dx * dx + dy * dy
-            if (d2 < bestD2) {
-                bestD2 = d2
-                best = n
+            val d = sqrt(dx * dx + dy * dy)
+            if (d < nearestD) {
+                nearestD = d
+                nearest = n
+            }
+            val r = cfg.radiusFor(n.population)
+            if (r > 0 && d <= r && d / r < hitRatio) {
+                hitRatio = d / r
+                hit = n
+                hitD = d
+                hitR = r
             }
         }
-        return best to sqrt(bestD2)
+        return if (hit != null) Draw(id, number, lat, lon, hit, hitD, hitR)
+        else Draw(id, number, lat, lon, nearest, nearestD, cfg.radiusFor(nearest.population))
     }
 
-    fun draw(id: Long, rnd: Random = Random.Default): Draw {
+    fun draw(id: Long, cfg: RadiusConfig, rnd: Random = Random.Default): Draw {
         val number = "%05d".format(rnd.nextInt(100_000))
         val (lat, lon) = randomPoint(rnd)
-        val (n, d) = nearest(lat, lon)
-        return Draw(id, number, lat, lon, n, d)
+        return evaluate(id, number, lat, lon, cfg)
     }
+
+    /** Muestra fija de puntos para estimar la tasa de aciertos de una configuración. */
+    private val sample: List<Pair<Double, Double>> by lazy {
+        val rnd = Random(2026)
+        List(2000) { randomPoint(rnd) }
+    }
+
+    fun estimateRate(cfg: RadiusConfig): Double =
+        sample.count { (lat, lon) -> evaluate(0, "", lat, lon, cfg).isHit }.toDouble() / sample.size
 }
