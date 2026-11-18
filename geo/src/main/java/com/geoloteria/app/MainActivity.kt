@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -74,8 +76,6 @@ private val HitGreen = Color(0xFF16A34A)
 private val es = Locale.forLanguageTag("es-ES")
 private val timeFmt = DateTimeFormatter.ofPattern("dd/MM HH:mm")
 
-/** Página oficial para buscar en qué administración se vende un número. */
-private const val BUSCAR_DECIMO = "https://www.loteriasyapuestas.es/es/buscar-decimo"
 private val FILE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm")
 private const val XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -128,15 +128,12 @@ fun App(vm: GeoViewModel = viewModel()) {
 
     // Al pulsar un número: se copia y se abre el buscador oficial de administraciones
     val clipboard = LocalClipboardManager.current
+    // Número cuya búsqueda oficial está abierta dentro de la app (null = pantalla normal)
+    var sellerNumber by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(enabled = sellerNumber != null) { sellerNumber = null }
     val openSeller: (String) -> Unit = { number ->
         clipboard.setText(AnnotatedString(number))
-        val ok = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BUSCAR_DECIMO))) }.isSuccess
-        Toast.makeText(
-            ctx,
-            if (ok) "Número $number copiado: pégalo en «Número buscado» y elige el sorteo"
-            else "No se pudo abrir el navegador. Número $number copiado.",
-            Toast.LENGTH_LONG,
-        ).show()
+        sellerNumber = number
     }
 
     val openMap: (Draw) -> Unit = { d ->
@@ -147,11 +144,30 @@ fun App(vm: GeoViewModel = viewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("GeoLotería") },
+                title = { Text(sellerNumber?.let { "Dónde venden el $it" } ?: "GeoLotería") },
+                navigationIcon = {
+                    if (sellerNumber != null) {
+                        IconButton(onClick = { sellerNumber = null }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
+                        }
+                    }
+                },
+                actions = {
+                    if (sellerNumber != null) {
+                        TextButton(onClick = {
+                            runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BUSCAR_DECIMO))) }
+                            Toast.makeText(ctx, "Número ${sellerNumber} copiado: pégalo en el buscador", Toast.LENGTH_LONG).show()
+                        }) { Text("Navegador", color = Color.White) }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Teal, titleContentColor = Color.White),
             )
         },
     ) { padding ->
+        sellerNumber?.let { n ->
+            SellerWeb(n, Modifier.fillMaxSize().padding(padding))
+            return@Scaffold
+        }
         selected?.let { d ->
             AlertDialog(
                 onDismissRequest = { selected = null },
@@ -168,8 +184,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                             style = MaterialTheme.typography.bodySmall)
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "«Dónde lo venden» copia el número y abre el buscador oficial de Loterías y Apuestas del Estado. " +
-                                "Allí pégalo en «Número buscado», elige el sorteo y pulsa Buscar.",
+                            "«Dónde lo venden» abre el buscador oficial de Loterías y Apuestas del Estado y busca este número automáticamente.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
