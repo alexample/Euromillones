@@ -1,6 +1,8 @@
 package com.euromillones.app.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -34,7 +36,11 @@ import com.euromillones.app.data.Draw
 import com.euromillones.app.data.GenTarget
 import com.euromillones.app.data.HOT_WINDOWS
 import com.euromillones.app.data.Mask
-import com.euromillones.app.data.historicTempMasks
+import com.euromillones.app.data.ALL_NUMBER_COMBOS
+import com.euromillones.app.data.HotCold
+import com.euromillones.app.data.comb
+import com.euromillones.app.data.countSequences
+import com.euromillones.app.data.historicHotCold
 import com.euromillones.app.ui.components.BallsWithLetters
 import com.euromillones.app.ui.components.HeaderCell
 import com.euromillones.app.ui.components.MaskLegend
@@ -102,6 +108,41 @@ internal fun targetFor(d: Draw, criterion: Criterion, withStars: Boolean, temp: 
     )
 }
 
+private val W_COMB = 64.dp
+private val W_PROB = 78.dp
+
+/** Fila del histórico: máscara del sorteo, combinaciones que tiene y probabilidad que tenía. */
+internal class MaskRow(val draw: Draw, val tokens: List<String>?, val combos: Long, val prob: Double)
+
+internal fun buildRow(
+    d: Draw,
+    criterion: Criterion,
+    withStars: Boolean,
+    temp: Pair<String, String>?,
+    hc: HotCold?,
+): MaskRow {
+    val tokens = maskTokens(d, criterion, withStars, temp)
+    if (tokens == null || (criterion != Criterion.LMH && hc == null)) return MaskRow(d, null, 0, 0.0)
+    val numCat: (Int) -> String = when (criterion) {
+        Criterion.LMH -> { n -> Mask.token(n) }
+        Criterion.CTF -> { n -> hc!!.temp(n).name }
+        Criterion.AMBOS -> { n -> Mask.token(n) + hc!!.temp(n).name }
+    }
+    val starCat: (Int) -> String = when (criterion) {
+        Criterion.LMH -> { s -> Mask.star(s).name }
+        Criterion.CTF -> { s -> hc!!.tempStar(s).name }
+        Criterion.AMBOS -> { s -> Mask.star(s).name + hc!!.tempStar(s).name }
+    }
+    var combos = countSequences(d.numbers.sorted().map(numCat), 50, numCat)
+    var total = ALL_NUMBER_COMBOS.toDouble()
+    if (withStars) {
+        val pool = Mask.starPool(d.date)
+        combos *= countSequences(d.stars.sorted().map(starCat), pool, starCat)
+        total *= comb(pool, 2)
+    }
+    return MaskRow(d, tokens, combos, combos / total)
+}
+
 private fun numWidth(c: Criterion): Dp = if (c == Criterion.AMBOS) 38.dp else 30.dp
 private fun starWidth(c: Criterion): Dp = if (c == Criterion.AMBOS) 52.dp else 30.dp
 
@@ -120,13 +161,17 @@ fun MasksScreen(
     var criterion by rememberSaveable { mutableStateOf(Criterion.LMH) }
     var withStars by rememberSaveable { mutableStateOf(true) }
 
-    val temps = remember(draws, window) { historicTempMasks(draws, window) }
+    val hcs = remember(draws, window) { historicHotCold(draws, window) }
+    val temps = remember(draws, hcs) {
+        draws.mapNotNull { d -> hcs[d.date]?.let { hc -> d.date to (hc.numbersMask(d.numbers) to hc.starsMask(d.stars)) } }.toMap()
+    }
     val rows = remember(draws, criterion, withStars, temps) {
-        draws.map { d -> d to maskTokens(d, criterion, withStars, temps[d.date]) }
+        draws.map { d -> buildRow(d, criterion, withStars, temps[d.date], hcs[d.date]) }
     }
     val counts = remember(rows) {
-        rows.mapNotNull { it.second?.joinToString(" ") }.groupingBy { it }.eachCount()
+        rows.mapNotNull { it.tokens?.joinToString(" ") }.groupingBy { it }.eachCount()
     }
+    val hScroll = rememberScrollState()
     val last = draws.first()
     val lastTemp = temps[last.date]
     val nw = numWidth(criterion)
@@ -165,6 +210,14 @@ fun MasksScreen(
                         tempOf = tNums?.let { t -> { n: Int -> t.getOrElse(sortedNums.indexOf(n)) { "" } } },
                         starTempOf = tStars?.let { t -> { s: Int -> t.getOrNull(sortedStars.indexOf(s))?.toString() ?: "" } },
                     )
+                    rows.firstOrNull()?.takeIf { it.tokens != null }?.let { r ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Su máscara (${criterion.title}${if (withStars) ", con estrellas" else ", solo números"}): " +
+                                "${intStr(r.combos)} combinaciones · probabilidad ${pctStr(r.prob)} (1 de cada ${intStr(1 / r.prob)})",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     Button(onClick = { onOpenMask(targetFor(last, criterion, withStars, lastTemp)) }) {
                         Text("Generar con esta máscara")
@@ -190,24 +243,33 @@ fun MasksScreen(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 6.dp),
             )
-            Row {
+            Row(Modifier.horizontalScroll(hScroll)) {
                 HeaderCell("Fecha", 58.dp)
                 (1..5).forEach { HeaderCell("N$it", nw) }
                 if (withStars) HeaderCell("★", sw)
+                HeaderCell("Comb.", W_COMB)
+                HeaderCell("Prob.", W_PROB)
                 HeaderCell("Veces", 40.dp)
             }
         }
 
-        itemsIndexed(rows, key = { _, r -> "row-${r.first.date}" }) { i, (d, tokens) ->
-            if (tokens == null) return@itemsIndexed
+        itemsIndexed(rows, key = { _, r -> "row-${r.draw.date}" }) { i, r ->
+            val tokens = r.tokens ?: return@itemsIndexed
+            val d = r.draw
             val m = tokens.joinToString(" ")
             val bg = if (i % 2 == 1) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else Color.Transparent
-            Row(Modifier.clickable { onOpenMask(targetFor(d, criterion, withStars, temps[d.date])) }) {
+            Row(
+                Modifier
+                    .horizontalScroll(hScroll)
+                    .clickable { onOpenMask(targetFor(d, criterion, withStars, temps[d.date])) },
+            ) {
                 TextCell(d.date.format(maskDateFmt), 58.dp, background = bg)
                 tokens.forEachIndexed { k, t ->
                     val isStar = withStars && k == tokens.lastIndex
                     TokenCell(t, isStar, if (isStar) sw else nw)
                 }
+                TextCell(intStr(r.combos), W_COMB, background = bg)
+                TextCell(pctStr(r.prob), W_PROB, background = bg)
                 val c = counts[m] ?: 0
                 TextCell("$c", 40.dp, bold = c > 1, background = bg)
             }

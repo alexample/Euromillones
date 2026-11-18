@@ -48,18 +48,22 @@ const val DEFAULT_HOT_WINDOW = 50
 /** Clasificación de cara al próximo sorteo. draws: el más reciente primero. */
 fun currentHotCold(draws: List<Draw>, window: Int): HotCold = HotCold.from(draws.take(window), 12)
 
+/** Clasificación frío/caliente que había justo antes de cada sorteo (con los [window] anteriores). draws: más reciente primero. */
+fun historicHotCold(draws: List<Draw>, window: Int): Map<LocalDate, HotCold> {
+    val out = HashMap<LocalDate, HotCold>()
+    for (i in draws.indices) {
+        val end = i + 1 + window
+        if (end > draws.size) break
+        out[draws[i].date] = HotCold.from(draws.subList(i + 1, end), Mask.starPool(draws[i].date))
+    }
+    return out
+}
+
 /**
  * Máscara frío/caliente que tenía cada sorteo, calculada con los [window] sorteos anteriores a él.
  * draws: el más reciente primero. Los primeros sorteos del histórico (sin ventana completa) no tienen.
  */
 fun historicTempMasks(draws: List<Draw>, window: Int): Map<LocalDate, Pair<String, String>> {
-    val out = HashMap<LocalDate, Pair<String, String>>()
-    for (i in draws.indices) {
-        val end = i + 1 + window
-        if (end > draws.size) break
-        val d = draws[i]
-        val hc = HotCold.from(draws.subList(i + 1, end), Mask.starPool(d.date))
-        out[d.date] = hc.numbersMask(d.numbers) to hc.starsMask(d.stars)
-    }
-    return out
+    val hcs = historicHotCold(draws, window)
+    return draws.mapNotNull { d -> hcs[d.date]?.let { hc -> d.date to (hc.numbersMask(d.numbers) to hc.starsMask(d.stars)) } }.toMap()
 }

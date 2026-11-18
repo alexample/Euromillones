@@ -91,3 +91,18 @@ object Mask {
         }
     }
 }
+
+/**
+ * Cuántas combinaciones ordenadas (n1 < n2 < …) de números 1..[maxN] tienen exactamente
+ * la categoría [tokens] en cada posición. Programación dinámica: instantáneo.
+ */
+fun countSequences(tokens: List<String>, maxN: Int, cat: (Int) -> String): Long {
+    val k = tokens.size
+    val dp = LongArray(k + 1)
+    dp[0] = 1
+    for (n in 1..maxN) {
+        val c = cat(n)
+        for (i in k downTo 1) if (tokens[i - 1] == c) dp[i] += dp[i - 1]
+    }
+    return dp[k]
+}
