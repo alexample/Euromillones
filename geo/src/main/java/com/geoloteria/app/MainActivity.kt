@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -105,8 +106,11 @@ fun App(vm: GeoViewModel = viewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
-    val hits = remember(s.hits, query) { s.hits.filter { matches(it.draw, query) } }
-    val recent = remember(s.recent, query) { s.recent.filter { matches(it, query) } }
+    val hits = remember(s.hits, query) { s.hits.filter { matchesQuery(it.draw, query) } }
+    // Con búsqueda: se busca en todo lo generado; sin búsqueda: los últimos 50
+    val searchResult = remember(query, s.historySize, s.total) { GeoEngine.search(query) }
+    val recent = if (query.isBlank()) s.recent else searchResult.second
+    var selected by remember { mutableStateOf<Draw?>(null) }
 
     // Permiso de notificaciones (Android 13+)
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -124,10 +128,15 @@ fun App(vm: GeoViewModel = viewModel()) {
 
     // Al pulsar un número: se copia y se abre el buscador oficial de administraciones
     val clipboard = LocalClipboardManager.current
-    val findSeller: (String) -> Unit = { number ->
+    val openSeller: (String) -> Unit = { number ->
         clipboard.setText(AnnotatedString(number))
-        Toast.makeText(ctx, "Número $number copiado: pégalo en el buscador", Toast.LENGTH_LONG).show()
-        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BUSCAR_DECIMO))) }
+        val ok = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BUSCAR_DECIMO))) }.isSuccess
+        Toast.makeText(
+            ctx,
+            if (ok) "Número $number copiado: pégalo en «Número buscado» y elige el sorteo"
+            else "No se pudo abrir el navegador. Número $number copiado.",
+            Toast.LENGTH_LONG,
+        ).show()
     }
 
     val openMap: (Draw) -> Unit = { d ->
@@ -143,6 +152,39 @@ fun App(vm: GeoViewModel = viewModel()) {
             )
         },
     ) { padding ->
+        selected?.let { d ->
+            AlertDialog(
+                onDismissRequest = { selected = null },
+                title = { Text(d.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.displaySmall) },
+                text = {
+                    Column {
+                        Text(
+                            (if (d.isHit) "En núcleo urbano: " else "Más cercano: ") +
+                                "${d.nearest.name} (${d.nearest.region}) a ${km(d.distanceKm)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text("${coord(d.lat)}, ${coord(d.lon)}", fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "«Dónde lo venden» copia el número y abre el buscador oficial de Loterías y Apuestas del Estado. " +
+                                "Allí pégalo en «Número buscado», elige el sorteo y pulsa Buscar.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { openSeller(d.number); selected = null }) { Text("Dónde lo venden") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = { openMap(d); selected = null }) { Text("Mapa") }
+                        TextButton(onClick = { selected = null }) { Text("Cerrar") }
+                    }
+                },
+            )
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(12.dp),
@@ -177,7 +219,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.displaySmall,
                                     textDecoration = TextDecoration.Underline,
-                                    modifier = Modifier.clickable { findSeller(d.number) },
+                                    modifier = Modifier.clickable { selected = d },
                                 )
                                 Spacer(Modifier.width(12.dp))
                                 Text(
@@ -377,7 +419,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleMedium,
                             textDecoration = TextDecoration.Underline,
-                            modifier = Modifier.width(76.dp).clickable { findSeller(h.draw.number) },
+                            modifier = Modifier.width(76.dp).clickable { selected = h.draw },
                         )
                         Column(Modifier.weight(1f)) {
                             Text("${h.draw.nearest.name} · ${h.draw.nearest.region}", fontWeight = FontWeight.SemiBold,
@@ -393,7 +435,9 @@ fun App(vm: GeoViewModel = viewModel()) {
             // ---------- Últimos generados ----------
             item {
                 Text(
-                    "Últimos generados" + if (query.isBlank()) "" else " · ${recent.size} de ${s.recent.size}",
+                    if (query.isBlank()) "Últimos generados"
+                    else "Resultados en todo lo generado · ${thousands(searchResult.first.toLong())}" +
+                        if (searchResult.first > recent.size) " (se muestran ${recent.size})" else "",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = 8.dp),
@@ -407,7 +451,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.width(64.dp).clickable { findSeller(d.number) },
+                        modifier = Modifier.width(64.dp).clickable { selected = d },
                     )
                     Text(
                         "${coord(d.lat)}, ${coord(d.lon)}",
@@ -431,15 +475,6 @@ fun App(vm: GeoViewModel = viewModel()) {
             }
         }
     }
-}
-
-/** Solo dígitos → busca en el número; si no → en la ciudad (núcleo más cercano) o la comunidad. */
-private fun matches(d: Draw, query: String): Boolean {
-    val q = query.trim()
-    if (q.isEmpty()) return true
-    if (q.all { it.isDigit() }) return d.number.contains(q)
-    val nq = norm(q)
-    return norm(d.nearest.name).contains(nq) || norm(d.nearest.region).contains(nq)
 }
 
 @Composable

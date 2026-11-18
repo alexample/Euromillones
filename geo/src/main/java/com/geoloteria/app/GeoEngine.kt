@@ -172,6 +172,14 @@ object GeoEngine {
             ?.vibrate(VibrationEffect.createOneShot(250, VibrationEffect.DEFAULT_AMPLITUDE))
     }
 
+    /** Busca en TODO lo generado (no solo en los últimos 50). Devuelve como mucho [limit] resultados. */
+    fun search(query: String, limit: Int = 300): Pair<Int, List<Draw>> {
+        if (query.isBlank()) return 0 to emptyList()
+        val all = synchronized(history) { history.toList() }
+        val found = all.filter { matchesQuery(it, query) }
+        return found.size to found.take(limit)
+    }
+
     // ---------------- Radio de acción ----------------
 
     fun setRadius(tier: Int, km: Double) {
@@ -373,3 +381,12 @@ private fun round2(x: Double) = Math.round(x * 100) / 100.0
 internal fun norm(x: String): String =
     java.text.Normalizer.normalize(x.trim(), java.text.Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "").lowercase(Locale.ROOT)
+
+/** Solo dígitos → busca en el número; si no → en la ciudad (núcleo) o la comunidad. Sin tildes ni mayúsculas. */
+internal fun matchesQuery(d: Draw, query: String): Boolean {
+    val q = query.trim()
+    if (q.isEmpty()) return true
+    if (q.all { it.isDigit() }) return d.number.contains(q)
+    val nq = norm(q)
+    return norm(d.nearest.name).contains(nq) || norm(d.nearest.region).contains(nq)
+}
