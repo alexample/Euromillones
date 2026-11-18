@@ -4,125 +4,104 @@ import java.time.LocalDate
 
 /**
  * Estadísticas de máscaras.
- *
- * - probability: probabilidad REAL de que la máscara salga en el próximo sorteo
- *   (combinatoria exacta con las reglas actuales: 5 de 50 y 2 de 12).
- * - count / expectedCount: veces que ha salido en el histórico frente a las esperadas.
- * - drawsSince: sorteos transcurridos desde su última aparición (retraso).
- *
- * Cada sorteo es independiente: el retraso no cambia la probabilidad. Se muestra como seguimiento.
+ *  - probability: probabilidad REAL de salir en el próximo sorteo (reglas actuales).
+ *  - count / expectedCount: veces que ha salido frente a las esperadas en el histórico
+ *    (en estrellas se tiene en cuenta que antes había 9 u 11).
+ *  - drawsSince: sorteos desde la última vez que salió.
+ * Cada sorteo es independiente: el retraso no cambia la probabilidad.
  */
-enum class StatKind(val title: String) {
-    COMBINADA("Dec + Uni"),
-    DECENAS("Decenas"),
-    UNIDADES("Unidades"),
+enum class MaskScope(val title: String) {
+    NUMEROS("Números"),
     ESTRELLAS("Estrellas"),
+    COMPLETA("Completa"),
 }
 
-enum class StatSort(val title: String) { PROBABLES("Más probables"), RETRASADAS("Más retrasadas") }
+enum class StatSort(val title: String) {
+    PROBABLES("Más probables"),
+    SALIDAS("Más salidas"),
+    RETRASADAS("Más retrasadas"),
+}
 
 data class PatternStat(
-    val parts: List<Pair<String, MaskKey>>, // p.ej. [("Dec", 2L2M1H), ("Uni", 1L2M2H)]
+    val mask: String,
     val probability: Double,
     val count: Int,
     val expectedCount: Double,
     val last: LocalDate?,
     val drawsSince: Int?, // null = nunca ha salido
 ) {
-    val id: String get() = parts.joinToString("|") { it.first + it.second.label }
-
-    /** Cada cuántos sorteos sale de media. */
     val averageGap: Double get() = if (probability > 0) 1 / probability else Double.POSITIVE_INFINITY
-
-    /** Retraso actual / retraso medio (1 = lo normal). */
     fun delayRatio(totalDraws: Int): Double = (drawsSince ?: totalDraws).toDouble() / averageGap
 }
 
-/** draws debe venir ordenado del más reciente al más antiguo. */
-fun computeStats(kind: StatKind, draws: List<Draw>): List<PatternStat> = when (kind) {
-    StatKind.DECENAS -> simple(MaskKind.DECENAS, "Dec", draws)
-    StatKind.UNIDADES -> simple(MaskKind.UNIDADES, "Uni", draws)
-    StatKind.ESTRELLAS -> simple(MaskKind.ESTRELLAS, "Est", draws)
-    StatKind.COMBINADA -> combined(draws)
+fun maskOf(scope: MaskScope, d: Draw): String = when (scope) {
+    MaskScope.NUMEROS -> Mask.numbers(d)
+    MaskScope.ESTRELLAS -> Mask.stars(d)
+    MaskScope.COMPLETA -> Mask.full(d)
 }
 
-private fun simple(mk: MaskKind, tag: String, draws: List<Draw>): List<PatternStat> {
-    val masks = draws.map { mk.maskOf(it) }
-    return mk.allKeys().map { k ->
-        val first = masks.indexOf(k)
-        PatternStat(
-            parts = listOf(tag to k),
-            probability = mk.expected(k), // reglas actuales
-            count = masks.count { it == k },
-            expectedCount = draws.sumOf { mk.expected(k, it) },
-            last = if (first >= 0) draws[first].date else null,
-            drawsSince = if (first >= 0) first else null,
-        )
-    }.filter { it.probability > 0 }
-}
-
-/** Máscara de decenas y unidades a la vez (no son independientes: se calcula la conjunta exacta). */
-private fun combined(draws: List<Draw>): List<PatternStat> {
-    val probs = combinedProbabilities()
-    val masks = draws.map { MaskKind.DECENAS.maskOf(it) to MaskKind.UNIDADES.maskOf(it) }
-    val countBy = masks.groupingBy { it }.eachCount()
-    val firstBy = HashMap<Pair<MaskKey, MaskKey>, Int>()
-    masks.forEachIndexed { i, m -> if (m !in firstBy) firstBy[m] = i }
-    return probs.map { (key, p) ->
-        val first = firstBy[key]
-        PatternStat(
-            parts = listOf("Dec" to key.first, "Uni" to key.second),
-            probability = p,
-            count = countBy[key] ?: 0,
-            expectedCount = p * draws.size,
-            last = first?.let { draws[it].date },
-            drawsSince = first,
-        )
+/** Suma, sorteo a sorteo, la probabilidad de cada máscara de estrellas con el bombo que había. */
+private fun starExpectedSums(draws: List<Draw>): Map<String, Double> {
+    val byPool = draws.groupingBy { Mask.starPool(it.date) }.eachCount()
+    val out = HashMap<String, Double>()
+    byPool.forEach { (pool, n) ->
+        Mask.starProbs(pool).forEach { (k, p) -> out[k] = (out[k] ?: 0.0) + p * n }
     }
-}
-
-private var cachedCombined: Map<Pair<MaskKey, MaskKey>, Double>? = null
-
-fun combinedProbabilities(): Map<Pair<MaskKey, MaskKey>, Double> {
-    cachedCombined?.let { return it }
-    // 9 casillas: (nivel decena, nivel unidad) con cuántos números del 1 al 50 caen en cada una
-    val size = IntArray(9)
-    for (n in 1..50) size[MaskKind.DECENAS.level(n).ordinal * 3 + MaskKind.UNIDADES.level(n).ordinal]++
-    val total = comb(50, 5)
-    val out = HashMap<Pair<MaskKey, MaskKey>, Double>()
-    val c = IntArray(9)
-
-    fun rec(idx: Int, left: Int) {
-        if (idx == 9) {
-            if (left != 0) return
-            var ways = 1.0
-            for (i in 0 until 9) ways *= comb(size[i], c[i])
-            if (ways == 0.0) return
-            val dec = MaskKey(c[0] + c[1] + c[2], c[3] + c[4] + c[5], c[6] + c[7] + c[8])
-            val uni = MaskKey(c[0] + c[3] + c[6], c[1] + c[4] + c[7], c[2] + c[5] + c[8])
-            val key = dec to uni
-            out[key] = (out[key] ?: 0.0) + ways / total
-            return
-        }
-        for (x in 0..left) {
-            c[idx] = x
-            rec(idx + 1, left - x)
-        }
-        c[idx] = 0
-    }
-    rec(0, 5)
-    cachedCombined = out
     return out
 }
 
-fun List<PatternStat>.sortedFor(sort: StatSort, totalDraws: Int): List<PatternStat> = when (sort) {
-    StatSort.PROBABLES -> sortedByDescending { it.probability }
-    StatSort.RETRASADAS -> sortedByDescending { it.delayRatio(totalDraws) }
+/** draws ordenado del más reciente al más antiguo. */
+fun computeStats(scope: MaskScope, draws: List<Draw>): List<PatternStat> {
+    val masks = draws.map { maskOf(scope, it) }
+    val count = masks.groupingBy { it }.eachCount()
+    val first = HashMap<String, Int>()
+    masks.forEachIndexed { i, m -> first.putIfAbsent(m, i) }
+    val starSum = starExpectedSums(draws)
+    val stars = Mask.starProbs(12)
+    val n = draws.size
+
+    fun stat(mask: String, p: Double, expected: Double): PatternStat {
+        val f = first[mask]
+        return PatternStat(mask, p, count[mask] ?: 0, expected, f?.let { draws[it].date }, f)
+    }
+
+    return when (scope) {
+        MaskScope.NUMEROS -> Mask.numberProbs.map { (m, p) -> stat(m, p, p * n) }
+        MaskScope.ESTRELLAS -> stars.map { (m, p) -> stat(m, p, starSum[m] ?: 0.0) }
+        MaskScope.COMPLETA -> {
+            val out = ArrayList<PatternStat>(Mask.numberProbs.size * stars.size)
+            Mask.numberProbs.forEach { (m, p) ->
+                stars.forEach { (s, ps) -> out += stat("$m $s", p * ps, p * (starSum[s] ?: 0.0)) }
+            }
+            out
+        }
+    }
 }
 
-internal fun comb(n: Int, k: Int): Double {
-    if (k < 0 || k > n) return 0.0
-    var r = 1.0
-    for (i in 1..k) r = r * (n - k + i) / i
-    return r
+/** Estadística de una sola máscara (para cuando se toca un sorteo). */
+fun statOf(scope: MaskScope, mask: String, draws: List<Draw>): PatternStat {
+    val idx = draws.indexOfFirst { maskOf(scope, it) == mask }
+    val count = draws.count { maskOf(scope, it) == mask }
+    val starSum = starExpectedSums(draws)
+    val stars = Mask.starProbs(12)
+    val (p, expected) = when (scope) {
+        MaskScope.NUMEROS -> {
+            val pn = Mask.numberProbs[mask] ?: 0.0
+            pn to pn * draws.size
+        }
+        MaskScope.ESTRELLAS -> (stars[mask] ?: 0.0) to (starSum[mask] ?: 0.0)
+        MaskScope.COMPLETA -> {
+            val num = mask.substringBeforeLast(" ")
+            val st = mask.substringAfterLast(" ")
+            val pn = Mask.numberProbs[num] ?: 0.0
+            (pn * (stars[st] ?: 0.0)) to (pn * (starSum[st] ?: 0.0))
+        }
+    }
+    return PatternStat(mask, p, count, expected, if (idx >= 0) draws[idx].date else null, if (idx >= 0) idx else null)
+}
+
+fun List<PatternStat>.sortedFor(sort: StatSort, totalDraws: Int): List<PatternStat> = when (sort) {
+    StatSort.PROBABLES -> sortedWith(compareByDescending<PatternStat> { it.probability }.thenByDescending { it.count })
+    StatSort.SALIDAS -> sortedWith(compareByDescending<PatternStat> { it.count }.thenByDescending { it.probability })
+    StatSort.RETRASADAS -> sortedByDescending { it.delayRatio(totalDraws) }
 }

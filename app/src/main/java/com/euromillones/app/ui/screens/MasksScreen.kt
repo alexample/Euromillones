@@ -1,6 +1,5 @@
 package com.euromillones.app.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,12 +12,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,220 +29,177 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.euromillones.app.data.Draw
-import com.euromillones.app.data.Level
-import com.euromillones.app.data.MaskKind
-import com.euromillones.app.data.MaskStat
-import com.euromillones.app.data.stats
+import com.euromillones.app.data.Mask
+import com.euromillones.app.data.MaskScope
+import com.euromillones.app.data.PatternStat
+import com.euromillones.app.data.maskOf
+import com.euromillones.app.data.statOf
 import com.euromillones.app.ui.components.Ball
+import com.euromillones.app.ui.components.DrawCard
+import com.euromillones.app.ui.components.MaskText
+import com.euromillones.app.ui.components.STARS_LAST
+import com.euromillones.app.ui.components.color
 import com.euromillones.app.ui.components.pretty
-import com.euromillones.app.ui.theme.HitGreen
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+private val es = Locale.forLanguageTag("es-ES")
 private val shortFmt = DateTimeFormatter.ofPattern("dd/MM/yy")
-private val LevelL = Color(0xFF0EA5E9)
-private val LevelM = Color(0xFF8B5CF6)
-private val LevelH = Color(0xFFEF4444)
 
-internal fun Level.color() = when (this) {
-    Level.L -> LevelL
-    Level.M -> LevelM
-    Level.H -> LevelH
+internal fun pctStr(x: Double) = when {
+    x >= 0.1 -> String.format(es, "%.1f %%", x * 100)
+    x >= 0.001 -> String.format(es, "%.2f %%", x * 100)
+    else -> String.format(es, "%.4f %%", x * 100)
 }
 
-private fun pct(x: Double) = String.format(Locale.forLanguageTag("es-ES"), "%.1f%%", x * 100)
+internal fun num1(x: Double) = String.format(es, "%.1f", x)
+internal fun intStr(x: Double) = String.format(es, "%,.0f", x)
 
 @Composable
 fun MasksScreen(draws: List<Draw>, modifier: Modifier = Modifier) {
-    var kind by rememberSaveable { mutableStateOf(MaskKind.DECENAS) }
-    var selected by rememberSaveable { mutableStateOf<String?>(null) }
-
-    val stats = remember(draws, kind) { kind.stats(draws) }
-    val selectedDraws = remember(draws, kind, selected) {
-        if (selected == null) emptyList() else draws.filter { kind.maskOf(it).label == selected }
-    }
-
     if (draws.isEmpty()) {
         Text("Sin datos todavía. Pulsa ⟳ para actualizar.", modifier.padding(24.dp))
         return
     }
+    var scope by rememberSaveable { mutableStateOf(MaskScope.NUMEROS) }
+    var selected by rememberSaveable { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+
+    val selStat = remember(draws, scope, selected) { selected?.let { statOf(scope, it, draws) } }
+    val selDraws = remember(draws, scope, selected) {
+        selected?.let { m -> draws.filter { maskOf(scope, it) == m } }.orEmpty()
+    }
+    LaunchedEffect(selected) { if (selected != null) listState.animateScrollToItem(0) }
 
     LazyColumn(
+        state = listState,
         modifier = modifier,
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (selStat != null) {
+            item { SelectedMaskCard(selStat, scope, onClear = { selected = null }) }
+            item {
+                Text("Sorteos con esta máscara · ${selDraws.size}", fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall)
+            }
+            items(selDraws, key = { "sel-${it.date}" }) { DrawCard(it) }
+            item { HorizontalDivider(Modifier.padding(vertical = 6.dp)) }
+        }
+
+        item { Text(Mask.RULES, style = MaterialTheme.typography.bodySmall) }
         item {
             Text("Último sorteo", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         }
-        item { MaskedDrawCard(draws.first()) }
+        item { MaskedDrawCard(draws.first()) { selected = maskOf(scope, draws.first()) } }
 
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MaskKind.entries.forEach { k ->
-                    FilterChip(
-                        selected = k == kind,
-                        onClick = { kind = k; selected = null },
-                        label = { Text(k.title) },
-                    )
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Comparar:", style = MaterialTheme.typography.bodySmall)
+                FilterChip(
+                    selected = scope == MaskScope.NUMEROS,
+                    onClick = { scope = MaskScope.NUMEROS; selected = null },
+                    label = { Text("Solo números") },
+                )
+                FilterChip(
+                    selected = scope == MaskScope.COMPLETA,
+                    onClick = { scope = MaskScope.COMPLETA; selected = null },
+                    label = { Text("Con estrellas") },
+                )
             }
         }
         item {
             Text(
-                "${kind.rule}\nEsperado = probabilidad teórica exacta. Pulsa una máscara para ver sus sorteos.",
+                "Histórico de máscaras · toca una para ver cuántas veces ha salido",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        items(draws, key = { "row-${it.date}" }) { d ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { selected = maskOf(scope, d) }
+                    .padding(vertical = 6.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(d.date.format(shortFmt), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
+                MaskText(Mask.full(d), starsTokenIndex = STARS_LAST, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SelectedMaskCard(s: PatternStat, scope: MaskScope, onClear: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                MaskText(
+                    s.mask,
+                    starsTokenIndex = if (scope == MaskScope.COMPLETA) STARS_LAST else -1,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onClear) { Text("Quitar") }
+            }
+            Text("Probabilidad en el próximo sorteo: ${pctStr(s.probability)} (1 de cada ${intStr(s.averageGap)})",
+                style = MaterialTheme.typography.bodySmall)
+            Text("Ha salido ${s.count} veces · esperadas ${num1(s.expectedCount)}",
+                style = MaterialTheme.typography.bodySmall)
+            Text(
+                when (val n = s.drawsSince) {
+                    null -> "Nunca ha salido"
+                    0 -> "Salió en el último sorteo"
+                    else -> "Última: ${s.last?.format(shortFmt)} · lleva $n sorteos sin salir"
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-
-        item { StatHeader() }
-        items(stats, key = { "${kind.name}-${it.key.label}" }) { s ->
-            StatRow(
-                s = s,
-                selected = s.key.label == selected,
-                onClick = { selected = if (selected == s.key.label) null else s.key.label },
-            )
-        }
-
-        selected?.let { label ->
-            item {
-                Text(
-                    "Sorteos con $label en ${kind.title.lowercase()} · ${selectedDraws.size}",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = HitGreen,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-            items(selectedDraws, key = { "sel-${it.date}" }) { d -> MaskedDrawCard(d) }
-        }
     }
 }
 
+/** Sorteo con las dos letras (decena+unidad) debajo de cada número y la letra de cada estrella. */
 @Composable
-private fun StatHeader() {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-        HeaderCell("Máscara", 1.3f, TextAlign.Start)
-        HeaderCell("Veces", 1f)
-        HeaderCell("Real", 1f)
-        HeaderCell("Esperado", 1.1f)
-        HeaderCell("Última", 1.1f)
-    }
-}
-
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.HeaderCell(
-    text: String,
-    w: Float,
-    align: TextAlign = TextAlign.End,
-) {
-    Text(
-        text,
-        modifier = Modifier.weight(w),
-        textAlign = align,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Bold,
-    )
-}
-
-@Composable
-private fun StatRow(s: MaskStat, selected: Boolean, onClick: () -> Unit) {
-    val diff = s.observed - s.expected
-    val diffColor = when {
-        s.expected == 0.0 -> MaterialTheme.colorScheme.onSurface
-        diff / s.expected > 0.10 -> HitGreen
-        diff / s.expected < -0.10 -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-    Row(
+fun MaskedDrawCard(draw: Draw, onClick: (() -> Unit)? = null) {
+    Card(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     ) {
-        Row(Modifier.weight(1.3f)) {
-            LevelText("${s.key.l}L", Level.L)
-            Spacer(Modifier.width(3.dp))
-            LevelText("${s.key.m}M", Level.M)
-            Spacer(Modifier.width(3.dp))
-            LevelText("${s.key.h}H", Level.H)
-        }
-        Cell(s.count.toString(), 1f, bold = true)
-        Cell(pct(s.observed), 1f, color = diffColor)
-        Cell(pct(s.expected), 1.1f)
-        Cell(s.last?.format(shortFmt) ?: "nunca", 1.1f)
-    }
-}
-
-@Composable
-internal fun LevelText(text: String, level: Level) {
-    Text(text, color = level.color(), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace,
-        style = MaterialTheme.typography.bodySmall)
-}
-
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.Cell(
-    text: String,
-    w: Float,
-    bold: Boolean = false,
-    color: Color = Color.Unspecified,
-) {
-    Text(
-        text,
-        modifier = Modifier.weight(w),
-        textAlign = TextAlign.End,
-        style = MaterialTheme.typography.bodySmall,
-        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-        color = color,
-    )
-}
-
-/** Sorteo con la letra de decena y unidad debajo de cada número (y de nivel en estrellas). */
-@Composable
-fun MaskedDrawCard(draw: Draw) {
-    val dec = MaskKind.DECENAS.maskOf(draw)
-    val uni = MaskKind.UNIDADES.maskOf(draw)
-    val est = MaskKind.ESTRELLAS.maskOf(draw)
-    Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Text(draw.date.pretty(), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                draw.numbers.forEach { n ->
+                draw.numbers.sorted().forEach { n ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Ball(n, isStar = false, size = 36.dp)
                         Row {
-                            LevelText(MaskKind.DECENAS.level(n).name, MaskKind.DECENAS.level(n))
-                            LevelText(MaskKind.UNIDADES.level(n).name, MaskKind.UNIDADES.level(n))
+                            Letter(Mask.dec(n))
+                            Letter(Mask.uni(n))
                         }
                     }
                 }
                 Spacer(Modifier.width(6.dp))
-                draw.stars.forEach { s ->
+                draw.stars.sorted().forEach { s ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Ball(s, isStar = true, size = 36.dp)
-                        LevelText(MaskKind.ESTRELLAS.level(s).name, MaskKind.ESTRELLAS.level(s))
+                        Letter(Mask.star(s))
                     }
                 }
             }
             Spacer(Modifier.height(6.dp))
-            Text(
-                "Dec: ${dec.label} · Uni: ${uni.label} · Est: ${est.label}",
-                style = MaterialTheme.typography.labelMedium,
-            )
+            MaskText(Mask.full(draw), starsTokenIndex = STARS_LAST, style = MaterialTheme.typography.titleMedium)
         }
     }
+}
+
+@Composable
+private fun Letter(l: com.euromillones.app.data.Level) {
+    Text(l.name, color = l.color(), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.bodySmall)
 }

@@ -1,19 +1,22 @@
 package com.euromillones.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,7 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -31,26 +34,28 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.euromillones.app.data.Draw
-import com.euromillones.app.data.MaskKey
+import com.euromillones.app.data.MaskScope
 import com.euromillones.app.data.PatternStat
-import com.euromillones.app.data.StatKind
 import com.euromillones.app.data.StatSort
 import com.euromillones.app.data.computeStats
 import com.euromillones.app.data.sortedFor
-import com.euromillones.app.data.Level
+import com.euromillones.app.ui.components.MaskText
+import com.euromillones.app.ui.components.STARS_LAST
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 
-private val es = Locale.forLanguageTag("es-ES")
 private val dFmt = DateTimeFormatter.ofPattern("dd/MM/yy")
 private val Orange = Color(0xFFEA580C)
 
-private fun pct2(x: Double) = String.format(es, if (x >= 0.1) "%.1f %%" else "%.2f %%", x * 100)
-private fun num1(x: Double) = String.format(es, "%.1f", x)
+private class StatsData(
+    val lists: Map<MaskScope, List<PatternStat>>,
+    val tops: Map<MaskScope, Pair<PatternStat, Int>>, // mejor + cuántas empatan con ella
+)
 
 @Composable
 fun StatsScreen(draws: List<Draw>, modifier: Modifier = Modifier) {
-    var kind by rememberSaveable { mutableStateOf(StatKind.COMBINADA) }
+    var scope by rememberSaveable { mutableStateOf(MaskScope.COMPLETA) }
     var sort by rememberSaveable { mutableStateOf(StatSort.PROBABLES) }
     var limit by rememberSaveable { mutableIntStateOf(30) }
 
@@ -59,76 +64,101 @@ fun StatsScreen(draws: List<Draw>, modifier: Modifier = Modifier) {
         return
     }
 
-    val all = remember(draws) { StatKind.entries.associateWith { computeStats(it, draws) } }
-    val list = remember(all, kind, sort) { all.getValue(kind).sortedFor(sort, draws.size) }
+    // El cálculo recorre los 2,1 millones de combinaciones: se hace en segundo plano
+    val data by produceState<StatsData?>(null, draws) {
+        value = withContext(Dispatchers.Default) {
+            val lists = MaskScope.entries.associateWith { computeStats(it, draws) }
+            val tops = lists.mapValues { (_, l) ->
+                val best = l.maxWith(compareBy<PatternStat> { it.probability }.thenBy { it.count })
+                best to l.count { kotlin.math.abs(it.probability - best.probability) < 1e-12 }
+            }
+            StatsData(lists, tops)
+        }
+    }
+    val sorted by produceState<List<PatternStat>?>(null, data, scope, sort) {
+        val d = data ?: return@produceState
+        value = withContext(Dispatchers.Default) { d.lists.getValue(scope).sortedFor(sort, draws.size) }
+    }
+
+    val d = data
+    val list = sorted
+    if (d == null || list == null) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(8.dp))
+                Text("Calculando probabilidades de todas las combinaciones…", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        return
+    }
 
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // ---- Resumen: lo más probable en el próximo sorteo ----
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary)) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                    Text(
-                        "Lo más probable en el próximo sorteo",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.padding(top = 4.dp))
-                    StatKind.entries.forEach { k ->
-                        val top = all.getValue(k).maxBy { it.probability }
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                            Text(
-                                "${k.title}:",
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.width(78.dp),
+                    Text("Lo más probable en el próximo sorteo", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    MaskScope.entries.forEach { k ->
+                        val (top, ties) = d.tops.getValue(k)
+                        Text("${k.title}:", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            MaskText(
+                                top.mask,
+                                starsTokenIndex = when (k) {
+                                    MaskScope.COMPLETA -> STARS_LAST
+                                    MaskScope.ESTRELLAS -> 0
+                                    else -> -1
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f),
                             )
-                            MaskParts(top, onDark = true)
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                pct2(top.probability),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+                            Text(pctStr(top.probability), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                         }
+                        if (ties > 1) {
+                            Text("(empatada con otras ${ties - 1} máscaras)", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Spacer(Modifier.height(4.dp))
                     }
                 }
             }
         }
 
-        // ---- Filtros ----
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(StatKind.entries) { k ->
-                    FilterChip(selected = k == kind, onClick = { kind = k; limit = 30 }, label = { Text(k.title) })
+                items(MaskScope.entries) { k ->
+                    FilterChip(selected = k == scope, onClick = { scope = k; limit = 30 }, label = { Text(k.title) })
                 }
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                StatSort.entries.forEach { s ->
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(StatSort.entries) { s ->
                     FilterChip(selected = s == sort, onClick = { sort = s; limit = 30 }, label = { Text(s.title) })
                 }
             }
         }
         item {
             Text(
-                if (sort == StatSort.PROBABLES)
-                    "Probabilidad real de que salga en el próximo sorteo (cálculo exacto). " +
-                        "Es la única que de verdad hace una máscara más probable que otra."
-                else
-                    "Retraso = sorteos sin salir comparado con su media. " +
-                        "Ojo: cada sorteo es independiente; el retraso no aumenta la probabilidad, sirve solo como seguimiento.",
+                when (sort) {
+                    StatSort.PROBABLES -> "Probabilidad real de salir en el próximo sorteo (cálculo exacto sobre todas las combinaciones). " +
+                        "Es lo único que hace que una máscara sea más probable que otra."
+                    StatSort.SALIDAS -> "Las que más veces han salido desde 2004, comparadas con las que se esperaban."
+                    StatSort.RETRASADAS -> "Sorteos sin salir comparado con su media. Ojo: cada sorteo es independiente, " +
+                        "el retraso no aumenta la probabilidad; sirve como seguimiento."
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+        item {
+            Text("${list.size} máscaras posibles", style = MaterialTheme.typography.labelMedium)
+        }
 
-        // ---- Lista ----
-        itemsIndexed(list.take(limit), key = { _, it -> it.id }) { i, s -> StatCard(s, i + 1, draws.size) }
+        itemsIndexed(list.take(limit), key = { _, it -> it.mask }) { i, s -> StatCard(s, i + 1, scope, draws.size) }
         if (list.size > limit) {
             item {
                 TextButton(onClick = { limit += 50 }, modifier = Modifier.fillMaxWidth()) {
@@ -140,66 +170,44 @@ fun StatsScreen(draws: List<Draw>, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun StatCard(s: PatternStat, rank: Int, totalDraws: Int) {
+private fun StatCard(s: PatternStat, rank: Int, scope: MaskScope, totalDraws: Int) {
     val ratio = s.delayRatio(totalDraws)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("#$rank", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
-                MaskParts(s)
-                Spacer(Modifier.weight(1f))
-                Text(pct2(s.probability), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                Text("#$rank", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp))
+                MaskText(
+                    s.mask,
+                    starsTokenIndex = when (scope) {
+                        MaskScope.COMPLETA -> STARS_LAST
+                        MaskScope.ESTRELLAS -> 0
+                        else -> -1
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(pctStr(s.probability), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
             }
-            Spacer(Modifier.padding(top = 4.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
-                "Sale 1 de cada ${num1(s.averageGap)} sorteos · ha salido ${s.count} veces (esperadas ${num1(s.expectedCount)})",
+                "Sale 1 de cada ${intStr(s.averageGap)} sorteos · ha salido ${s.count} veces (esperadas ${num1(s.expectedCount)})",
                 style = MaterialTheme.typography.bodySmall,
             )
-            val sinceText = when (val n = s.drawsSince) {
-                null -> "Nunca ha salido"
-                0 -> "Salió en el último sorteo (${s.last?.format(dFmt)})"
-                else -> "Última: ${s.last?.format(dFmt)} · lleva $n sorteos sin salir"
-            }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(sinceText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                if (ratio >= 1.5) {
-                    Text(
-                        "retraso ×${num1(ratio)}",
-                        color = Orange,
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                Text(
+                    when (val n = s.drawsSince) {
+                        null -> "Nunca ha salido"
+                        0 -> "Salió en el último sorteo (${s.last?.format(dFmt)})"
+                        else -> "Última: ${s.last?.format(dFmt)} · lleva $n sorteos sin salir"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (ratio >= 1.5 && s.count > 0) {
+                    Text("retraso ×${num1(ratio)}", color = Orange, fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.labelMedium)
                 }
             }
-        }
-    }
-}
-
-/** "Dec 2L 2M 1H · Uni 1L 2M 2H" con colores por nivel. */
-@Composable
-private fun MaskParts(s: PatternStat, onDark: Boolean = false) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        s.parts.forEachIndexed { i, (tag, key) ->
-            if (i > 0) Text(" · ", style = MaterialTheme.typography.bodySmall, color = if (onDark) Color.White else Color.Unspecified)
-            if (s.parts.size > 1) {
-                Text("$tag ", style = MaterialTheme.typography.labelSmall, color = if (onDark) Color.White else Color.Unspecified)
-            }
-            KeyText(key, onDark)
-        }
-    }
-}
-
-@Composable
-private fun KeyText(k: MaskKey, onDark: Boolean) {
-    if (onDark) {
-        Text(k.label, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-    } else {
-        Row {
-            LevelText("${k.l}L", Level.L)
-            Spacer(Modifier.width(2.dp))
-            LevelText("${k.m}M", Level.M)
-            Spacer(Modifier.width(2.dp))
-            LevelText("${k.h}H", Level.H)
         }
     }
 }
