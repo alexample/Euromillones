@@ -47,7 +47,9 @@ import com.euromillones.app.data.GeneratedCombo
 import com.euromillones.app.data.HotCold
 import com.euromillones.app.data.Mask
 import com.euromillones.app.data.MaskPool
+import com.euromillones.app.data.STAR_PAIRS
 import com.euromillones.app.data.Temp
+import com.euromillones.app.data.TempCount
 import com.euromillones.app.data.buildPool
 import com.euromillones.app.data.currentHotCold
 import com.euromillones.app.data.generate
@@ -88,6 +90,12 @@ private fun Char.next(): Char = when (this) {
 @Composable
 fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier: Modifier = Modifier) {
     var temps by rememberSaveable(target) { mutableStateOf(initialTemps(target)) }
+    // Reparto automático: activo por defecto salvo que la máscara traiga frío/caliente por casilla
+    var auto by rememberSaveable(target) { mutableStateOf(target.tempNum == null && target.tempStar == null) }
+    var autoSel by rememberSaveable(target) { mutableStateOf(TempCount.all.first().encode()) }
+    var starSel by rememberSaveable(target) { mutableStateOf("") }
+    val counts: Set<TempCount> = autoSel.split(";").mapNotNull { TempCount.decode(it) }.toSet()
+    val pairs: Set<String> = starSel.split(";").filter { it.isNotBlank() }.toSet()
     var amount by rememberSaveable { mutableIntStateOf(5) }
     var avoidDrawn by rememberSaveable { mutableStateOf(true) }
     var combos by remember(target) { mutableStateOf<List<GeneratedCombo>>(emptyList()) }
@@ -104,30 +112,52 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
         }
     }
     // Grupo con todos los filtros
-    val pool by produceState<MaskPool?>(null, target, hc, temps) {
+    val pool by produceState<MaskPool?>(null, target, hc, temps, auto, autoSel, starSel) {
         value = null
         value = withContext(Dispatchers.Default) {
-            buildPool(
-                target.numMask,
-                target.starMask,
-                hc,
-                temps.take(5).map { it.toTemp() },
-                temps.drop(5).map { it.toTemp() },
-            )
+            if (auto) {
+                buildPool(
+                    target.numMask, target.starMask, hc, List(5) { null }, List(2) { null },
+                    tempCounts = counts.ifEmpty { null },
+                    starPairs = pairs.ifEmpty { null },
+                )
+            } else {
+                buildPool(
+                    target.numMask,
+                    target.starMask,
+                    hc,
+                    temps.take(5).map { it.toTemp() },
+                    temps.drop(5).map { it.toTemp() },
+                )
+            }
         }
     }
-    val filterOn = temps.any { it != '-' }
+    val filterOn = if (auto) counts.isNotEmpty() || pairs.isNotEmpty() else temps.any { it != '-' }
+    // Frecuencia real de cada reparto en el histórico (con la clasificación de cada momento)
+    val realShare = remember(historic) {
+        val c = historic.values.groupingBy { TempCount.ofMask(it.first) }.eachCount()
+        val n = historic.size.coerceAtLeast(1)
+        c.mapValues { it.value.toDouble() / n }
+    }
     val numTempOf: ((Int) -> String)? = if (filterOn) ({ n: Int -> hc.temp(n).name }) else null
     val starTempOf: ((Int) -> String)? = if (filterOn) ({ s: Int -> hc.tempStar(s).name }) else null
     // Cada vez que cambian los filtros (o al entrar) se generan combinaciones nuevas
     LaunchedEffect(pool) {
         pool?.let { combos = generate(it, amount, if (avoidDrawn) drawnPacked else emptySet()) }
     }
-    val matches = remember(draws, target, temps, historic) {
+    val matches = remember(draws, target, temps, historic, auto, autoSel, starSel) {
         draws.filter { d ->
             (target.numMask == null || Mask.numbers(d) == target.numMask) &&
                 (target.starMask == null || Mask.stars(d) == target.starMask) &&
                 run {
+                    if (auto) {
+                        if (counts.isEmpty() && pairs.isEmpty()) return@run true
+                        val h = historic[d.date] ?: return@run false
+                        val okN = counts.isEmpty() || TempCount.ofMask(h.first) in counts
+                        val okS = pairs.isEmpty() || h.second.length == 2 &&
+                            h.second.toList().map { it.toString() }.sorted().joinToString("") in pairs
+                        return@run okN && okS
+                    }
                     if (temps.all { it == '-' }) return@run true
                     val h = historic[d.date] ?: return@run false
                     val tn = h.first.split(" ")
@@ -162,31 +192,46 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
                             TokenCell(target.starMask?.getOrNull(i)?.toString() ?: "–", true, GW)
                         }
                     }
-                    Row {
-                        TextCell("Frío/Cal.", 58.dp, bold = true)
-                        temps.forEachIndexed { i, ch ->
-                            TableCell(
-                                GW,
-                                if (ch == '-') Color.Transparent else MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                                Modifier.clickable { temps = temps.replaceRange(i, i + 1, ch.next().toString()) },
-                            ) {
-                                Text(
-                                    if (ch == '-') "–" else ch.toString(),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.labelLarge,
-                                )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        FilterChip(selected = auto, onClick = { auto = true }, label = { Text("Reparto automático") })
+                        FilterChip(selected = !auto, onClick = { auto = false }, label = { Text("Por casilla") })
+                    }
+                    if (!auto) {
+                        Row {
+                            TextCell("Frío/Cal.", 58.dp, bold = true)
+                            temps.forEachIndexed { i, ch ->
+                                TableCell(
+                                    GW,
+                                    if (ch == '-') Color.Transparent else MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                                    Modifier.clickable { temps = temps.replaceRange(i, i + 1, ch.next().toString()) },
+                                ) {
+                                    Text(
+                                        if (ch == '-') "–" else ch.toString(),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.labelLarge,
+                                    )
+                                }
                             }
                         }
-                    }
-                    Text(
-                        "Toca una casilla de Frío/Cal. para cambiarla: – (cualquiera) → C → T → F. " +
-                            "Se usan los calientes y fríos de los últimos $window sorteos.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                    TextButton(enabled = filterOn, onClick = { temps = "-------" }) {
-                        Text(if (filterOn) "Quitar filtro frío/caliente" else "Sin filtro frío/caliente")
+                        Text(
+                            "Toca una casilla de Frío/Cal. para cambiarla: – (cualquiera) → C → T → F. " +
+                                "Se usan los calientes y fríos de los últimos $window sorteos.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        TextButton(enabled = filterOn, onClick = { temps = "-------" }) {
+                            Text(if (filterOn) "Quitar filtro frío/caliente" else "Sin filtro frío/caliente")
+                        }
+                    } else {
+                        AutoDistribution(
+                            counts = counts,
+                            realShare = realShare,
+                            pairs = pairs,
+                            window = window,
+                            onCounts = { set -> autoSel = set.joinToString(";") { it.encode() } },
+                            onPairs = { set -> starSel = set.joinToString(";") },
+                        )
                     }
 
                     val b = base
@@ -296,5 +341,87 @@ private fun InfoLine(label: String, value: String) {
     Row(Modifier.padding(vertical = 1.dp)) {
         Text("$label: ", style = MaterialTheme.typography.bodySmall)
         Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** Selector del reparto automático entre calientes, templados y fríos. */
+@Composable
+private fun AutoDistribution(
+    counts: Set<TempCount>,
+    realShare: Map<TempCount, Double>,
+    pairs: Set<String>,
+    window: Int,
+    onCounts: (Set<TempCount>) -> Unit,
+    onPairs: (Set<String>) -> Unit,
+) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val all = TempCount.all
+    // Los repartos más probables hasta cubrir el 50 % de los sorteos
+    val top50 = buildList {
+        var acc = 0.0
+        for (tc in all) {
+            if (acc >= 0.5) break
+            add(tc)
+            acc += tc.probability
+        }
+    }.toSet()
+    Column(Modifier.padding(top = 6.dp)) {
+        Text(
+            "Elige cuántos calientes (C), templados (T) y fríos (F) lleva la combinación, en cualquier posición. " +
+                "Clasificación con los últimos $window sorteos.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = counts == setOf(all.first()), onClick = { onCounts(setOf(all.first())) },
+                label = { Text("Más probable") })
+            FilterChip(selected = counts == top50, onClick = { onCounts(top50) }, label = { Text("Top 50 %") })
+            FilterChip(selected = counts.isEmpty(), onClick = { onCounts(emptySet()) }, label = { Text("Todas") })
+        }
+        Row {
+            HeaderCell("", 30.dp)
+            HeaderCell("Reparto", 92.dp)
+            HeaderCell("Teórico", 70.dp)
+            HeaderCell("Real", 70.dp)
+        }
+        val shown = if (showAll) all else all.take(10)
+        shown.forEach { tc ->
+            val sel = tc in counts
+            Row(Modifier.clickable { onCounts(if (sel) counts - tc else counts + tc) }) {
+                TableCell(30.dp, if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else Color.Transparent) {
+                    Text(if (sel) "✓" else "", fontWeight = FontWeight.Bold)
+                }
+                TokenCell(tc.label, false, 92.dp)
+                TextCell(pctStr(tc.probability), 70.dp)
+                TextCell(pctStr(realShare[tc] ?: 0.0), 70.dp)
+            }
+        }
+        TextButton(onClick = { showAll = !showAll }) {
+            Text(if (showAll) "Ver menos" else "Ver los 21 repartos")
+        }
+        val sumSel = counts.sumOf { it.probability }
+        if (counts.isNotEmpty()) {
+            Text("Los repartos elegidos salen en el ${pctStr(sumSel)} de los sorteos (teórico).",
+                style = MaterialTheme.typography.bodySmall)
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Estrellas (pareja de temperaturas)", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        STAR_PAIRS.chunked(3).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                row.forEach { (k, _) ->
+                    val sel = k in pairs
+                    FilterChip(
+                        selected = sel,
+                        onClick = { onPairs(if (sel) pairs - k else pairs + k) },
+                        label = { Text("${k[0]}+${k[1]}", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) },
+                    )
+                }
+            }
+        }
+        Text(
+            if (pairs.isEmpty()) "Sin filtro de estrellas. Mezclas (C+T, C+F, F+T): 24,2 % cada una · iguales (C+C…): 9,1 %."
+            else "Elegidas: ${pctStr(STAR_PAIRS.filter { it.first in pairs }.sumOf { it.second })} de los sorteos (teórico).",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }

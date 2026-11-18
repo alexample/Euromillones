@@ -65,12 +65,22 @@ fun buildPool(
     hc: HotCold,
     tempNum: List<Temp?>,
     tempStar: List<Temp?>,
+    tempCounts: Set<TempCount>? = null,
+    starPairs: Set<String>? = null,
 ): MaskPool {
     val lmh = numMask?.split(" ")?.map { tok ->
         Level.valueOf(tok[0].toString()).ordinal * 3 + Level.valueOf(tok[1].toString()).ordinal
     }
     val anyTemp = tempNum.any { it != null }
-    val numbers: IntArray? = if (lmh == null && !anyTemp) null else {
+    // Código de temperatura de cada número: 0 = C, 1 = T, 2 = F
+    val tcode = IntArray(51) { n -> if (n == 0) 1 else hc.temp(n).ordinal }
+    val isHot = IntArray(51) { if (tcode[it] == 0) 1 else 0 }
+    val isCold = IntArray(51) { if (tcode[it] == 2) 1 else 0 }
+    // allowedCount[c][f] = el reparto con c calientes y f fríos está permitido
+    val allowedCount = tempCounts?.let { set ->
+        Array(6) { c -> BooleanArray(6) { f -> set.any { it.c == c && it.f == f } } }
+    }
+    val numbers: IntArray? = if (lmh == null && !anyTemp && allowedCount == null) null else {
         // allowed[pos][n]: el número n puede ir en la posición pos
         val allowed = Array(5) { pos ->
             BooleanArray(51) { n ->
@@ -90,7 +100,13 @@ fun buildPool(
                     for (d in c + 1..49) {
                         if (!a3[d]) continue
                         for (e in d + 1..50) {
-                            if (a4[e]) out += (((a * 64 + b) * 64 + c) * 64 + d) * 64 + e
+                            if (!a4[e]) continue
+                            if (allowedCount != null) {
+                                val hot = isHot[a] + isHot[b] + isHot[c] + isHot[d] + isHot[e]
+                                val cold = isCold[a] + isCold[b] + isCold[c] + isCold[d] + isCold[e]
+                                if (!allowedCount[hot][cold]) continue
+                            }
+                            out += (((a * 64 + b) * 64 + c) * 64 + d) * 64 + e
                         }
                     }
                 }
@@ -103,6 +119,7 @@ fun buildPool(
             if (starMask != null && Mask.star(i).name + Mask.star(j).name != starMask) continue
             if (tempStar.getOrNull(0) != null && hc.tempStar(i) != tempStar[0]) continue
             if (tempStar.getOrNull(1) != null && hc.tempStar(j) != tempStar[1]) continue
+            if (starPairs != null && starPairKey(hc.tempStar(i), hc.tempStar(j)) !in starPairs) continue
             add(i to j)
         }
     }
@@ -129,4 +146,46 @@ fun generate(pool: MaskPool, n: Int, exclude: Set<Int>, rnd: Random = Random.Def
         val (s1, s2) = pool.stars.random(rnd)
         GeneratedCombo(unpack(p), listOf(s1, s2))
     }
+}
+
+/** Reparto de calientes / templados / fríos entre los 5 números. */
+data class TempCount(val c: Int, val t: Int, val f: Int) {
+    val label: String get() = "${c}C ${t}T ${f}F"
+    fun encode(): String = "$c,$t,$f"
+
+    /** Probabilidad teórica (16 calientes, 18 templados, 16 fríos). */
+    val probability: Double
+        get() = comb(16, c) * comb(18, t) * comb(16, f) / comb(50, 5)
+
+    companion object {
+        fun decode(s: String): TempCount? = s.split(",").mapNotNull { it.toIntOrNull() }
+            .takeIf { it.size == 3 }?.let { TempCount(it[0], it[1], it[2]) }
+
+        /** Los 21 repartos posibles, del más probable al menos. */
+        val all: List<TempCount> by lazy {
+            buildList { for (c in 0..5) for (t in 0..5 - c) add(TempCount(c, t, 5 - c - t)) }
+                .sortedByDescending { it.probability }
+        }
+
+        fun ofMask(numMask: String): TempCount {
+            val t = numMask.split(" ")
+            return TempCount(t.count { it == "C" }, t.count { it == "T" }, t.count { it == "F" })
+        }
+    }
+}
+
+/** Pareja de temperaturas de las estrellas, sin orden: "CT", "CC", "TF"… */
+fun starPairKey(a: Temp, b: Temp): String = listOf(a.name, b.name).sorted().joinToString("")
+
+/** Las 6 parejas posibles con su probabilidad teórica (bombo de 12: 4 C, 4 T, 4 F). */
+val STAR_PAIRS: List<Pair<String, Double>> = listOf(
+    "CT" to 16.0 / 66, "CF" to 16.0 / 66, "FT" to 16.0 / 66,
+    "CC" to 6.0 / 66, "TT" to 6.0 / 66, "FF" to 6.0 / 66,
+)
+
+internal fun comb(n: Int, k: Int): Double {
+    if (k < 0 || k > n) return 0.0
+    var r = 1.0
+    for (i in 1..k) r = r * (n - k + i) / i
+    return r
 }
