@@ -2,17 +2,18 @@ package com.euromillones.app.data
 
 import kotlin.random.Random
 
-/** Máscara elegida para generar: parte de números (5 bloques) y/o de estrellas (1 bloque). Null = libre. */
-data class GenTarget(val numMask: String?, val starMask: String?) {
-    val scope: MaskScope
-        get() = when {
-            numMask != null && starMask != null -> MaskScope.COMPLETA
-            numMask != null -> MaskScope.NUMEROS
-            else -> MaskScope.ESTRELLAS
-        }
-    val mask: String get() = listOfNotNull(numMask, starMask).joinToString(" ")
-
-    fun encode(): String = "${numMask.orEmpty()}|${starMask.orEmpty()}"
+/**
+ * Máscara elegida para generar. Cada parte es opcional (null = libre):
+ *  numMask  "HM LL MH HH HM"   · starMask "LH"   (decena/unidad)
+ *  tempNum  "C T F F C"        · tempStar "CF"   (caliente/templado/frío)
+ */
+data class GenTarget(
+    val numMask: String?,
+    val starMask: String?,
+    val tempNum: String? = null,
+    val tempStar: String? = null,
+) {
+    fun encode(): String = listOf(numMask, starMask, tempNum, tempStar).joinToString("|") { it.orEmpty() }
 
     companion object {
         fun fromScope(scope: MaskScope, mask: String): GenTarget = when (scope) {
@@ -22,8 +23,9 @@ data class GenTarget(val numMask: String?, val starMask: String?) {
         }
 
         fun decode(s: String): GenTarget {
-            val (n, st) = s.split("|", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
-            return GenTarget(n.ifBlank { null }, st.ifBlank { null })
+            val p = s.split("|")
+            fun at(i: Int) = p.getOrNull(i)?.ifBlank { null }
+            return GenTarget(at(0), at(1), at(2), at(3))
         }
     }
 }
@@ -41,29 +43,54 @@ fun unpack(p: Int): List<Int> {
     return out.toList()
 }
 
-/** Todas las combinaciones que cumplen la máscara. numbers = null → cualquier combinación de números. */
+const val ALL_NUMBER_COMBOS = 2_118_760L
+const val ALL_STAR_COMBOS = 66L
+
+/** Combinaciones que cumplen los filtros. numbers = null → cualquier combinación de números. */
 class MaskPool(val numbers: IntArray?, val stars: List<Pair<Int, Int>>) {
-    val numberCount: Long get() = numbers?.size?.toLong() ?: 2_118_760L
+    val numberCount: Long get() = numbers?.size?.toLong() ?: ALL_NUMBER_COMBOS
     val total: Long get() = numberCount * stars.size
+
+    /** Probabilidad de que el próximo sorteo caiga dentro de este grupo. */
+    val probability: Double get() = total.toDouble() / (ALL_NUMBER_COMBOS * ALL_STAR_COMBOS)
 }
 
-fun buildPool(t: GenTarget): MaskPool {
-    val numbers = t.numMask?.let { m ->
-        val target = m.split(" ").map { tok ->
-            Level.valueOf(tok[0].toString()).ordinal * 3 + Level.valueOf(tok[1].toString()).ordinal
+/**
+ * [tempNum] y [tempStar]: filtro frío/caliente por posición (números ordenados de menor a mayor);
+ * null en una posición = cualquiera.
+ */
+fun buildPool(
+    numMask: String?,
+    starMask: String?,
+    hc: HotCold,
+    tempNum: List<Temp?>,
+    tempStar: List<Temp?>,
+): MaskPool {
+    val lmh = numMask?.split(" ")?.map { tok ->
+        Level.valueOf(tok[0].toString()).ordinal * 3 + Level.valueOf(tok[1].toString()).ordinal
+    }
+    val anyTemp = tempNum.any { it != null }
+    val numbers: IntArray? = if (lmh == null && !anyTemp) null else {
+        // allowed[pos][n]: el número n puede ir en la posición pos
+        val allowed = Array(5) { pos ->
+            BooleanArray(51) { n ->
+                n != 0 &&
+                    (lmh == null || Mask.dec(n).ordinal * 3 + Mask.uni(n).ordinal == lmh[pos]) &&
+                    (tempNum.getOrNull(pos) == null || hc.temp(n) == tempNum[pos])
+            }
         }
-        val code = IntArray(51) { n -> if (n == 0) -1 else Mask.dec(n).ordinal * 3 + Mask.uni(n).ordinal }
+        val a0 = allowed[0]; val a1 = allowed[1]; val a2 = allowed[2]; val a3 = allowed[3]; val a4 = allowed[4]
         val out = ArrayList<Int>()
         for (a in 1..46) {
-            if (code[a] != target[0]) continue
+            if (!a0[a]) continue
             for (b in a + 1..47) {
-                if (code[b] != target[1]) continue
+                if (!a1[b]) continue
                 for (c in b + 1..48) {
-                    if (code[c] != target[2]) continue
+                    if (!a2[c]) continue
                     for (d in c + 1..49) {
-                        if (code[d] != target[3]) continue
+                        if (!a3[d]) continue
                         for (e in d + 1..50) {
-                            if (code[e] == target[4]) out += (((a * 64 + b) * 64 + c) * 64 + d) * 64 + e
+                            if (a4[e]) out += (((a * 64 + b) * 64 + c) * 64 + d) * 64 + e
                         }
                     }
                 }
@@ -73,7 +100,10 @@ fun buildPool(t: GenTarget): MaskPool {
     }
     val stars = buildList {
         for (i in 1..11) for (j in i + 1..12) {
-            if (t.starMask == null || Mask.star(i).name + Mask.star(j).name == t.starMask) add(i to j)
+            if (starMask != null && Mask.star(i).name + Mask.star(j).name != starMask) continue
+            if (tempStar.getOrNull(0) != null && hc.tempStar(i) != tempStar[0]) continue
+            if (tempStar.getOrNull(1) != null && hc.tempStar(j) != tempStar[1]) continue
+            add(i to j)
         }
     }
     return MaskPool(numbers, stars)
@@ -81,10 +111,7 @@ fun buildPool(t: GenTarget): MaskPool {
 
 data class GeneratedCombo(val numbers: List<Int>, val stars: List<Int>)
 
-/**
- * Genera [n] combinaciones distintas al azar dentro de la máscara.
- * [exclude] = combinaciones de 5 números (empaquetadas) que no se quieren repetir (las ya premiadas).
- */
+/** Genera [n] combinaciones distintas al azar dentro del grupo. [exclude] = combinaciones de 5 números ya premiadas. */
 fun generate(pool: MaskPool, n: Int, exclude: Set<Int>, rnd: Random = Random.Default): List<GeneratedCombo> {
     if (pool.stars.isEmpty()) return emptyList()
     val chosen: List<Int> = if (pool.numbers != null) {

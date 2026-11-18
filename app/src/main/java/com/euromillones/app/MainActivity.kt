@@ -29,6 +29,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -37,6 +38,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.euromillones.app.data.DEFAULT_HOT_WINDOW
 import com.euromillones.app.data.GenTarget
 import com.euromillones.app.ui.screens.GeneratorScreen
 import com.euromillones.app.ui.screens.MasksScreen
@@ -74,6 +76,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
     var module by rememberSaveable { mutableStateOf(AppModule.RESULTADOS) }
     // Pantalla de generador abierta (máscara codificada) o null
     var gen by rememberSaveable { mutableStateOf<String?>(null) }
+    var hotWindow by rememberSaveable { mutableIntStateOf(DEFAULT_HOT_WINDOW) }
     val openMask: (GenTarget) -> Unit = { gen = it.encode() }
     BackHandler(enabled = gen != null) { gen = null }
 
@@ -131,7 +134,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
             .padding(padding)
         val g = gen
         if (g != null) {
-            GeneratorScreen(GenTarget.decode(g), state.draws, mod)
+            GeneratorScreen(GenTarget.decode(g), state.draws, hotWindow, mod)
         } else when (module) {
             AppModule.RESULTADOS -> ResultsScreen(state, mod)
             AppModule.BUSCAR -> SearchScreen(
@@ -141,7 +144,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                 onClear = vm::clearQuery,
                 modifier = mod,
             )
-            AppModule.MASCARAS -> MasksScreen(state.draws, openMask, mod)
+            AppModule.MASCARAS -> MasksScreen(state.draws, hotWindow, { hotWindow = it }, openMask, mod)
             AppModule.ESTADISTICAS -> StatsScreen(state.draws, openMask, mod)
         }
     }
