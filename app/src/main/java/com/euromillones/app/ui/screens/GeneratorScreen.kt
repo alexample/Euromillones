@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -115,6 +116,13 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
             )
         }
     }
+    val filterOn = temps.any { it != '-' }
+    val numTempOf: ((Int) -> String)? = if (filterOn) ({ n: Int -> hc.temp(n).name }) else null
+    val starTempOf: ((Int) -> String)? = if (filterOn) ({ s: Int -> hc.tempStar(s).name }) else null
+    // Cada vez que cambian los filtros (o al entrar) se generan combinaciones nuevas
+    LaunchedEffect(pool) {
+        pool?.let { combos = generate(it, amount, if (avoidDrawn) drawnPacked else emptySet()) }
+    }
     val matches = remember(draws, target, temps, historic) {
         draws.filter { d ->
             (target.numMask == null || Mask.numbers(d) == target.numMask) &&
@@ -177,7 +185,9 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 6.dp),
                     )
-                    TextButton(onClick = { temps = "-------" }) { Text("Quitar filtro frío/caliente") }
+                    TextButton(enabled = filterOn, onClick = { temps = "-------" }) {
+                        Text(if (filterOn) "Quitar filtro frío/caliente" else "Sin filtro frío/caliente")
+                    }
 
                     val b = base
                     val p = pool
@@ -261,8 +271,8 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
                         c.numbers,
                         c.stars,
                         size = 32.dp,
-                        tempOf = { n -> hc.temp(n).name },
-                        starTempOf = { s -> hc.tempStar(s).name },
+                        tempOf = numTempOf,
+                        starTempOf = starTempOf,
                     )
                 }
             }
