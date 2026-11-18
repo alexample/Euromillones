@@ -41,7 +41,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val es = Locale.forLanguageTag("es-ES")
-internal val shortFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yy")
+internal val maskDateFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yy")
 
 internal fun pctStr(x: Double) = when {
     x >= 0.1 -> String.format(es, "%.1f%%", x * 100)
@@ -120,7 +120,7 @@ fun MasksScreen(draws: List<Draw>, onOpenMask: (GenTarget) -> Unit, modifier: Mo
             val bg = if (i % 2 == 1) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             else androidx.compose.ui.graphics.Color.Transparent
             Row(Modifier.clickable { onOpenMask(GenTarget.fromScope(scope, m)) }) {
-                TextCell(d.date.format(shortFmt), 66.dp, background = bg)
+                TextCell(d.date.format(maskDateFmt), 66.dp, background = bg)
                 MaskCells(m, scope)
                 TextCell("${counts[m] ?: 0}", 48.dp, bold = (counts[m] ?: 0) > 1, background = bg)
             }

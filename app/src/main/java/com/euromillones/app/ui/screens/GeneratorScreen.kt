@@ -104,8 +104,8 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, modifier: Modifier = M
                         "Última vez",
                         when (val n = s.drawsSince) {
                             null -> "nunca"
-                            0 -> "${s.last?.format(shortFmt)} (último sorteo)"
-                            else -> "${s.last?.format(shortFmt)} · hace $n sorteos"
+                            0 -> "${s.last?.format(maskDateFmt)} (último sorteo)"
+                            else -> "${s.last?.format(maskDateFmt)} · hace $n sorteos"
                         },
                     )
                     InfoLine(
