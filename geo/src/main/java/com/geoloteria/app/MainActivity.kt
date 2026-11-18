@@ -85,6 +85,7 @@ private val Teal = Color(0xFF0F766E)
 private val HitGreen = Color(0xFF16A34A)
 private val es = Locale.forLanguageTag("es-ES")
 private val timeFmt = DateTimeFormatter.ofPattern("dd/MM HH:mm")
+private const val PAGE = 500
 
 private val FILE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm")
 private const val XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -116,21 +117,32 @@ fun App(vm: GeoViewModel = viewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
-    val sq = remember(query) { SearchQuery(query) }
-    val hits = remember(s.hits, sq) { if (sq.isEmpty) s.hits else s.hits.filter { sq.matches(it.draw) } }
-    // Con búsqueda: se busca en todo lo generado, fuera de la pantalla, al dejar de escribir
-    // y cada 3 s (no con cada número nuevo); sin búsqueda: los últimos 50
-    val searchResult by produceState(0 to emptyList<Draw>(), query) {
+    // Búsqueda en TODO lo guardado (base de datos), fuera de la pantalla:
+    // al dejar de escribir y cada 3 s; "Ver más" amplía la página.
+    var pageLimit by rememberSaveable(query) { mutableStateOf(PAGE) }
+    val searchResult by produceState(0L to emptyList<Draw>(), query, pageLimit) {
         if (query.isBlank()) {
-            value = 0 to emptyList()
+            value = 0L to emptyList()
             return@produceState
         }
         delay(300)
         while (true) {
-            value = withContext(Dispatchers.Default) { GeoEngine.search(query) }
+            value = withContext(Dispatchers.Default) { GeoEngine.search(query, pageLimit) }
             delay(3_000)
         }
     }
+    val hitsResult by produceState(0L to emptyList<Draw>(), query) {
+        if (query.isBlank()) {
+            value = 0L to emptyList()
+            return@produceState
+        }
+        delay(300)
+        while (true) {
+            value = withContext(Dispatchers.Default) { GeoEngine.search(query, 500, hitsOnly = true) }
+            delay(3_000)
+        }
+    }
+    val hits: List<Hit> = if (query.isBlank()) s.hits else hitsResult.second.map { Hit(it, null) }
     val recent = if (query.isBlank()) s.recent else searchResult.second
     var selected by remember { mutableStateOf<Draw?>(null) }
 
@@ -452,7 +464,9 @@ fun App(vm: GeoViewModel = viewModel()) {
             // ---------- Aciertos ----------
             item {
                 Text(
-                    "Aciertos · " + if (query.isBlank()) "${s.hits.size}" else "${hits.size} de ${s.hits.size}",
+                    "Aciertos · " + if (query.isBlank()) thousands(s.hitCount)
+                    else "${thousands(hitsResult.first)} encontrados" +
+                        if (hitsResult.first > hits.size) " (se muestran ${hits.size})" else "",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = 8.dp),
@@ -476,7 +490,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                             Text("${coord(h.draw.lat)}, ${coord(h.draw.lon)} · a ${km(h.draw.distanceKm)}",
                                 style = MaterialTheme.typography.bodySmall)
                         }
-                        Text(h.time.format(timeFmt), style = MaterialTheme.typography.labelSmall)
+                        Text(h.time?.format(timeFmt).orEmpty(), style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -485,7 +499,7 @@ fun App(vm: GeoViewModel = viewModel()) {
             item {
                 Text(
                     if (query.isBlank()) "Últimos generados"
-                    else "Resultados en todo lo generado · ${thousands(searchResult.first.toLong())}" +
+                    else "Resultados en todo lo generado · ${thousands(searchResult.first)}" +
                         if (searchResult.first > recent.size) " (se muestran ${recent.size})" else "",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
@@ -514,6 +528,13 @@ fun App(vm: GeoViewModel = viewModel()) {
                         fontWeight = if (d.isHit) FontWeight.Bold else FontWeight.Normal,
                         style = MaterialTheme.typography.labelSmall,
                     )
+                }
+            }
+            if (query.isNotBlank() && searchResult.first > recent.size) {
+                item {
+                    TextButton(onClick = { pageLimit += PAGE }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Ver más (${thousands(searchResult.first - recent.size)} restantes)")
+                    }
                 }
             }
             item { Spacer(Modifier.height(24.dp)) }

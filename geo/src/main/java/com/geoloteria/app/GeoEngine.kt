@@ -23,7 +23,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-data class Hit(val draw: Draw, val time: LocalDateTime)
+data class Hit(val draw: Draw, val time: LocalDateTime?)
 
 data class GeoState(
     val ready: Boolean = false,
@@ -39,7 +39,7 @@ data class GeoState(
     val vibrate: Boolean = true,
     val radius: RadiusConfig = RadiusConfig(),
     val expectedRate: Double? = null,
-    val historySize: Int = 0,   // números guardados (para exportar)
+    val historySize: Long = 0,   // números guardados (para exportar)
     val message: String? = null,
     // Avisos con filtro
     val watchNumbers: List<String> = emptyList(),   // 5 cifras = número exacto; menos = terminación
@@ -76,8 +76,26 @@ object GeoEngine {
     private var lastVibration = 0L
     private var dirty = false
 
-    /** Todo lo generado o importado (el más reciente primero). */
-    private val history = ArrayDeque<Draw>()
+    /** Base de datos con TODO lo generado o importado (sin límite). */
+    private lateinit var db: DrawDb
+
+    /** Números aún no guardados en la base de datos (se guardan en lotes cada segundo). */
+    private val pending = ArrayList<Pair<Draw, Long>>()
+
+    private fun queue(items: List<Draw>) {
+        val now = System.currentTimeMillis()
+        synchronized(pending) { items.forEach { pending += it to now } }
+    }
+
+    /** Pasa a la base de datos lo pendiente. */
+    private fun flush() {
+        val g = geo ?: return
+        val batch = synchronized(pending) {
+            if (pending.isEmpty()) return
+            ArrayList(pending).also { pending.clear() }
+        }
+        db.insertAll(batch, g.index)
+    }
 
     private val dataFile get() = File(app.filesDir, "geoloteria.dat")
 
@@ -96,16 +114,19 @@ object GeoEngine {
         val ch = android.app.NotificationChannel(ALERT_CHANNEL, "Avisos de número o población",
             android.app.NotificationManager.IMPORTANCE_HIGH)
         app.getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(ch)
+        db = DrawDb(app)
         scope.launch {
             val g = Geo(app)
             geo = g
             load(g)
             _state.update { it.copy(ready = true, nucleos = g.nucleos.size) }
             estimate()
-            // Guardado automático cada 15 s si hay cambios
+            // Cada segundo se guardan los números nuevos; cada 15 s los avisos
+            var tick = 0
             while (isActive) {
-                delay(15_000)
-                if (dirty) save()
+                delay(1_000)
+                runCatching { flush() }
+                if (++tick % 15 == 0 && dirty) save()
             }
         }
     }
@@ -150,7 +171,8 @@ object GeoEngine {
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
     fun clear() {
-        synchronized(history) { history.clear() }
+        synchronized(pending) { pending.clear() }
+        scope.launch { db.clear() }
         _state.update {
             it.copy(last = null, recent = emptyList(), hits = emptyList(), alerts = emptyList(), historySize = 0, total = 0, hitCount = 0)
         }
@@ -158,14 +180,8 @@ object GeoEngine {
         saveAsync()
     }
 
-    private fun addHistory(items: List<Draw>): Int = synchronized(history) {
-        items.forEach { history.addFirst(it) }
-        while (history.size > HISTORY_MAX) history.removeLast()
-        history.size
-    }
-
     private fun record(d: Draw) {
-        val size = addHistory(listOf(d))
+        queue(listOf(d))
         _state.update { s ->
             s.copy(
                 last = d,
@@ -173,7 +189,7 @@ object GeoEngine {
                 hits = if (d.isHit) (listOf(Hit(d, LocalDateTime.now())) + s.hits).take(HITS_MAX) else s.hits,
                 total = s.total + 1,
                 hitCount = s.hitCount + if (d.isHit) 1 else 0,
-                historySize = size,
+                historySize = s.total + 1,
             )
         }
         dirty = true
@@ -286,21 +302,16 @@ object GeoEngine {
             ?.vibrate(VibrationEffect.createOneShot(250, VibrationEffect.DEFAULT_AMPLITUDE))
     }
 
-    /** Busca en TODO lo generado (no solo en los últimos 50). Devuelve como mucho [limit] resultados. */
-    fun search(query: String, limit: Int = 300): Pair<Int, List<Draw>> {
-        val q = SearchQuery(query)
-        if (q.isEmpty) return 0 to emptyList()
-        var count = 0
-        val out = ArrayList<Draw>(minOf(limit, 64))
-        synchronized(history) {
-            for (d in history) {
-                if (q.matches(d)) {
-                    count++
-                    if (out.size < limit) out += d
-                }
-            }
-        }
-        return count to out
+    /**
+     * Busca en TODO lo guardado (sin límite). Devuelve cuántos coinciden en total
+     * y la primera página de [limit] resultados (del más reciente al más antiguo).
+     */
+    fun search(query: String, limit: Int = 500, hitsOnly: Boolean = false): Pair<Long, List<Draw>> {
+        val g = geo ?: return 0L to emptyList()
+        runCatching { flush() }
+        val count = db.searchCount(query, hitsOnly)
+        val page = db.search(query, g.nucleos, hitsOnly, limit).map { it.first }
+        return count to page
     }
 
     // ---------------- Radio de acción ----------------
@@ -340,84 +351,68 @@ object GeoEngine {
     @Synchronized
     private fun save() {
         val g = geo ?: return
+        runCatching { flush() }
         dirty = false
         val s = _state.value
         val idx = g.index
         val sb = StringBuilder()
-        sb.append("v1;").append(s.total).append(';').append(s.hitCount).append(';').append(nextId).append('\n')
-        fun line(tag: Char, d: Draw) {
-            sb.append(tag).append(';').append(d.number).append(';').append(d.lat).append(';').append(d.lon).append(';')
+        sb.append("v2;").append(nextId).append('\n')
+        // Los números van en la base de datos; aquí solo los avisos recibidos
+        s.alerts.forEach { a ->
+            val d = a.draw
+            sb.append("A;").append(d.number).append(';').append(d.lat).append(';').append(d.lon).append(';')
                 .append(idx[d.nearest] ?: 0).append(';').append(d.distanceKm).append(';').append(d.radiusKm)
                 .append(';').append(d.id)
-        }
-        s.hits.forEach { h ->
-            line('H', h.draw)
-            sb.append(';').append(h.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()).append('\n')
-        }
-        s.alerts.forEach { a ->
-            line('A', a.draw)
-            sb.append(';').append(a.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
+                .append(';').append(a.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
                 .append(';').append(a.reason.replace(";", ",").replace("\n", " ")).append('\n')
         }
-        synchronized(history) { history.toList() }.forEach { line('D', it); sb.append('\n') }
         val tmp = File(app.filesDir, "geoloteria.tmp")
         tmp.writeText(sb.toString())
         tmp.renameTo(dataFile)
     }
 
+    private fun toTime(ms: Long): LocalDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneId.systemDefault())
+
     private fun load(g: Geo) {
+        val alerts = ArrayList<Alert>()
+        val migrate = ArrayList<Pair<Draw, Long>>()
         val f = dataFile
-        if (!f.exists()) return
-        runCatching {
-            val hits = ArrayList<Hit>()
-            val alerts = ArrayList<Alert>()
-            val hist = ArrayList<Draw>()
-            var total = 0L
-            var hitCount = 0L
+        if (f.exists()) runCatching {
             f.forEachLine { l ->
                 val p = l.split(";")
                 when (p.firstOrNull()) {
-                    "v1" -> {
-                        total = p.getOrNull(1)?.toLongOrNull() ?: 0
-                        hitCount = p.getOrNull(2)?.toLongOrNull() ?: 0
-                        nextId = p.getOrNull(3)?.toLongOrNull() ?: 1
-                    }
+                    "v1", "v2" -> nextId = maxOf(nextId, p.getOrNull(if (p[0] == "v1") 3 else 1)?.toLongOrNull() ?: 1)
                     "H", "D", "A" -> {
                         if (p.size < 8) return@forEachLine
-                        val n = g.nucleos.getOrNull(p[4].toInt()) ?: return@forEachLine
+                        val n = g.nucleos.getOrNull(p[4].toIntOrNull() ?: -1) ?: return@forEachLine
                         val d = Draw(p[7].toLong(), p[1], p[2].toDouble(), p[3].toDouble(), n, p[5].toDouble(), p[6].toDouble())
-                        if (p[0] == "A") {
-                            val t = p.getOrNull(8)?.toLongOrNull()?.let {
-                                LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault())
-                            } ?: LocalDateTime.now()
-                            alerts += Alert(d, p.getOrNull(9) ?: "Aviso", t)
-                        } else if (p[0] == "H") {
-                            val t = p.getOrNull(8)?.toLongOrNull()?.let {
-                                LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault())
-                            } ?: LocalDateTime.now()
-                            hits += Hit(d, t)
-                        } else {
-                            hist += d
+                        val t = p.getOrNull(8)?.toLongOrNull()
+                        when (p[0]) {
+                            "A" -> alerts += Alert(d, p.getOrNull(9) ?: "Aviso", t?.let(::toTime) ?: LocalDateTime.now())
+                            "D" -> migrate += d to System.currentTimeMillis()   // versión anterior: pasa a la base de datos
                         }
                     }
                 }
             }
-            synchronized(history) {
-                history.clear()
-                history.addAll(hist)
-            }
-            _state.update {
-                it.copy(
-                    hits = hits,
-                    alerts = alerts,
-                    recent = hist.take(50),
-                    last = hist.firstOrNull(),
-                    total = total,
-                    hitCount = hitCount,
-                    historySize = hist.size,
-                )
-            }
         }
+        if (migrate.isNotEmpty() && db.count() == 0L) db.insertAll(migrate.reversed(), g.index)
+
+        val total = db.count()
+        nextId = maxOf(nextId, db.maxId() + 1)
+        val recent = db.search("", g.nucleos, limit = 50).map { it.first }
+        val hits = db.search("", g.nucleos, hitsOnly = true, limit = HITS_MAX).map { (d, ts) -> Hit(d, toTime(ts)) }
+        _state.update {
+            it.copy(
+                hits = hits,
+                alerts = alerts,
+                recent = recent,
+                last = recent.firstOrNull(),
+                total = total,
+                hitCount = db.count(hitsOnly = true),
+                historySize = total,
+            )
+        }
+        if (migrate.isNotEmpty()) save()
     }
 
     // ---------------- Excel ----------------
@@ -425,27 +420,43 @@ object GeoEngine {
     private val TIME = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss", Locale.forLanguageTag("es-ES"))
 
     fun exportExcel(uri: Uri) {
+        val g = geo ?: return
         scope.launch(Dispatchers.IO) {
+            runCatching { flush() }
             val s = _state.value
             val header = listOf("Número", "Latitud", "Longitud", "En núcleo", "Ciudad", "Comunidad",
-                "Habitantes", "Distancia (km)", "Radio (km)")
-            fun row(d: Draw): List<Any?> = listOf(
+                "Habitantes", "Distancia (km)", "Radio (km)", "Fecha y hora")
+            fun row(d: Draw, ts: Long): List<Any?> = listOf(
                 d.number, d.lat, d.lon, if (d.isHit) "Sí" else "No", d.nearest.name, d.nearest.region,
-                d.nearest.population, round2(d.distanceKm), round2(d.radiusKm),
+                d.nearest.population, round2(d.distanceKm), round2(d.radiusKm), toTime(ts).format(TIME),
             )
-            val config = listOf(listOf("Habitantes", "Radio (km)")) +
-                RadiusConfig.TIER_LABEL.mapIndexed { i, l -> listOf(l, s.radius.km[i]) }
-            val hist = synchronized(history) { history.toList() }
+            val max = Xlsx.MAX_ROWS - 1
+            var nHits = 0
+            var nAll = 0
             val result = runCatching {
                 app.contentResolver.openOutputStream(uri)?.use { out ->
                     Xlsx.write(
                         out,
                         listOf(
-                            "Aciertos" to listOf(header + "Fecha y hora") + s.hits.map { h -> row(h.draw) + h.time.format(TIME) },
-                            "Generados" to listOf(header) + hist.map { row(it) },
-                            "Avisos" to listOf(listOf("Motivo") + header + "Fecha y hora") +
-                                s.alerts.map { a -> listOf<Any?>(a.reason) + row(a.draw) + a.time.format(TIME) },
-                            "Radios" to config,
+                            Xlsx.Sheet("Aciertos") { emit ->
+                                emit(header)
+                                db.forEach(g.nucleos, hitsOnly = true, max = max) { d, ts -> nHits++; emit(row(d, ts)) }
+                            },
+                            Xlsx.Sheet("Generados") { emit ->
+                                emit(header)
+                                db.forEach(g.nucleos, hitsOnly = false, max = max) { d, ts -> nAll++; emit(row(d, ts)) }
+                            },
+                            Xlsx.sheet(
+                                "Avisos",
+                                listOf(listOf<Any?>("Motivo") + header) + s.alerts.map { a ->
+                                    listOf<Any?>(a.reason) + row(a.draw, a.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
+                                },
+                            ),
+                            Xlsx.sheet(
+                                "Radios",
+                                listOf(listOf<Any?>("Habitantes", "Radio (km)")) +
+                                    RadiusConfig.TIER_LABEL.mapIndexed { i, l -> listOf<Any?>(l, s.radius.km[i]) },
+                            ),
                         ),
                     )
                 } ?: error("no se pudo abrir el fichero")
@@ -453,7 +464,10 @@ object GeoEngine {
             _state.update {
                 it.copy(
                     message = result.fold(
-                        { "Exportados ${s.hits.size} aciertos y ${hist.size} números a Excel." },
+                        {
+                            "Exportados $nHits aciertos y $nAll números a Excel." +
+                                if (nAll >= max) " (Excel admite como mucho ${max} filas: se exportaron los más recientes.)" else ""
+                        },
                         { e -> "Error al exportar: ${e.message}" },
                     ),
                 )
@@ -493,10 +507,11 @@ object GeoEngine {
             result.onSuccess { draws ->
                 val now = LocalDateTime.now()
                 val newHits = draws.filter { it.isHit }
-                val size = addHistory(draws)
+                queue(draws)
+                runCatching { flush() }
                 _state.update { s ->
                     s.copy(
-                        historySize = size,
+                        historySize = s.total + draws.size,
                         recent = (draws.reversed() + s.recent).take(50),
                         hits = (newHits.reversed().map { Hit(it, now) } + s.hits).take(HITS_MAX),
                         hitCount = s.hitCount + newHits.size,

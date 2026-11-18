@@ -18,74 +18,87 @@ object Xlsx {
 
     // ---------------- Escritura ----------------
 
-    /** sheets: nombre de hoja → filas → celdas (String o Number; null = vacía). */
-    fun write(out: OutputStream, sheets: List<Pair<String, List<List<Any?>>>>) {
-        ZipOutputStream(out).use { zip ->
-            fun put(name: String, content: String) {
-                zip.putNextEntry(ZipEntry(name))
-                zip.write(content.toByteArray(Charsets.UTF_8))
-                zip.closeEntry()
-            }
-            val n = sheets.size
-            put(
-                "[Content_Types].xml",
-                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
-                    """<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">""" +
-                    """<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>""" +
-                    """<Default Extension="xml" ContentType="application/xml"/>""" +
-                    """<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>""" +
-                    (1..n).joinToString("") {
-                        """<Override PartName="/xl/worksheets/sheet$it.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"""
-                    } +
-                    "</Types>",
-            )
-            put(
-                "_rels/.rels",
-                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
-                    """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">""" +
-                    """<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>""" +
-                    "</Relationships>",
-            )
-            put(
-                "xl/workbook.xml",
-                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
-                    """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>""" +
-                    sheets.mapIndexed { i, (name, _) ->
-                        """<sheet name="${esc(name.take(31))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>"""
-                    }.joinToString("") +
-                    "</sheets></workbook>",
-            )
-            put(
-                "xl/_rels/workbook.xml.rels",
-                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
-                    """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">""" +
-                    (1..n).joinToString("") {
-                        """<Relationship Id="rId$it" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet$it.xml"/>"""
-                    } +
-                    "</Relationships>",
-            )
-            sheets.forEachIndexed { i, (_, rows) -> put("xl/worksheets/sheet${i + 1}.xml", sheetXml(rows)) }
-        }
-    }
+    /** Hoja que se escribe fila a fila: [rows] recibe una función a la que pasar cada fila. */
+    class Sheet(val name: String, val rows: (emit: (List<Any?>) -> Unit) -> Unit)
 
-    private fun sheetXml(rows: List<List<Any?>>): String {
-        val sb = StringBuilder()
-        sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
-        sb.append("""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>""")
-        rows.forEachIndexed { r, row ->
-            sb.append("""<row r="${r + 1}">""")
-            row.forEachIndexed { c, v ->
-                val ref = colName(c) + (r + 1)
-                when (v) {
-                    null -> {}
-                    is Number -> sb.append("""<c r="$ref"><v>$v</v></c>""")
-                    else -> sb.append("""<c r="$ref" t="inlineStr"><is><t xml:space="preserve">${esc(v.toString())}</t></is></c>""")
+    /** Comodidad: hoja a partir de una lista ya hecha. */
+    fun sheet(name: String, list: List<List<Any?>>) = Sheet(name) { emit -> list.forEach(emit) }
+
+    /** Excel admite como mucho 1.048.576 filas por hoja. */
+    const val MAX_ROWS = 1_048_576
+
+    fun write(out: OutputStream, sheets: List<Sheet>) {
+        val zip = ZipOutputStream(out.buffered())
+        fun put(name: String, content: String) {
+            zip.putNextEntry(ZipEntry(name))
+            zip.write(content.toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+        }
+        val n = sheets.size
+        put(
+            "[Content_Types].xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
+                """<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">""" +
+                """<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>""" +
+                """<Default Extension="xml" ContentType="application/xml"/>""" +
+                """<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>""" +
+                (1..n).joinToString("") {
+                    """<Override PartName="/xl/worksheets/sheet$it.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"""
+                } +
+                "</Types>",
+        )
+        put(
+            "_rels/.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
+                """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">""" +
+                """<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>""" +
+                "</Relationships>",
+        )
+        put(
+            "xl/workbook.xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
+                """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>""" +
+                sheets.mapIndexed { i, sh ->
+                    """<sheet name="${esc(sh.name.take(31))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>"""
+                }.joinToString("") +
+                "</sheets></workbook>",
+        )
+        put(
+            "xl/_rels/workbook.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""" +
+                """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">""" +
+                (1..n).joinToString("") {
+                    """<Relationship Id="rId$it" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet$it.xml"/>"""
+                } +
+                "</Relationships>",
+        )
+        sheets.forEachIndexed { i, sh ->
+            zip.putNextEntry(ZipEntry("xl/worksheets/sheet${i + 1}.xml"))
+            val w = zip.bufferedWriter(Charsets.UTF_8)
+            w.write("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
+            w.write("""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>""")
+            var r = 0
+            sh.rows { row ->
+                if (r < MAX_ROWS) {
+                    r++
+                    w.write("""<row r="$r">""")
+                    row.forEachIndexed { c, v ->
+                        val ref = colName(c) + r
+                        when (v) {
+                            null -> {}
+                            is Number -> w.write("""<c r="$ref"><v>$v</v></c>""")
+                            else -> w.write("""<c r="$ref" t="inlineStr"><is><t xml:space="preserve">${esc(v.toString())}</t></is></c>""")
+                        }
+                    }
+                    w.write("</row>")
                 }
             }
-            sb.append("</row>")
+            w.write("</sheetData></worksheet>")
+            w.flush() // no se cierra: cerraría el zip entero
+            zip.closeEntry()
         }
-        sb.append("</sheetData></worksheet>")
-        return sb.toString()
+        zip.finish()
+        zip.flush()
     }
 
     private fun colName(i: Int): String {
