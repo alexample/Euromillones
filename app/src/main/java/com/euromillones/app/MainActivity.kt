@@ -2,6 +2,7 @@ package com.euromillones.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -35,6 +37,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.euromillones.app.data.GenTarget
+import com.euromillones.app.ui.screens.GeneratorScreen
 import com.euromillones.app.ui.screens.MasksScreen
 import com.euromillones.app.ui.screens.ResultsScreen
 import com.euromillones.app.ui.screens.SearchScreen
@@ -68,16 +72,28 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val query by vm.query.collectAsStateWithLifecycle()
     var module by rememberSaveable { mutableStateOf(AppModule.RESULTADOS) }
+    // Pantalla de generador abierta (máscara codificada) o null
+    var gen by rememberSaveable { mutableStateOf<String?>(null) }
+    val openMask: (GenTarget) -> Unit = { gen = it.encode() }
+    BackHandler(enabled = gen != null) { gen = null }
 
     Scaffold(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text("Euromillones · ${module.title}") },
+                    title = { Text(if (gen != null) "Generar combinaciones" else "Euromillones · ${module.title}") },
+                    navigationIcon = {
+                        if (gen != null) {
+                            IconButton(onClick = { gen = null }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                            }
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         titleContentColor = MaterialTheme.colorScheme.onPrimary,
                         actionIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
                     ),
                     actions = {
                         IconButton(onClick = vm::refresh, enabled = !state.loading) {
@@ -102,7 +118,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                 AppModule.entries.forEach { m ->
                     NavigationBarItem(
                         selected = m == module,
-                        onClick = { module = m },
+                        onClick = { module = m; gen = null },
                         icon = { Icon(m.icon, contentDescription = m.title) },
                         label = { Text(m.title) },
                     )
@@ -113,7 +129,10 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
         val mod = Modifier
             .fillMaxSize()
             .padding(padding)
-        when (module) {
+        val g = gen
+        if (g != null) {
+            GeneratorScreen(GenTarget.decode(g), state.draws, mod)
+        } else when (module) {
             AppModule.RESULTADOS -> ResultsScreen(state, mod)
             AppModule.BUSCAR -> SearchScreen(
                 draws = state.draws,
@@ -122,8 +141,8 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
                 onClear = vm::clearQuery,
                 modifier = mod,
             )
-            AppModule.MASCARAS -> MasksScreen(state.draws, mod)
-            AppModule.ESTADISTICAS -> StatsScreen(state.draws, mod)
+            AppModule.MASCARAS -> MasksScreen(state.draws, openMask, mod)
+            AppModule.ESTADISTICAS -> StatsScreen(state.draws, openMask, mod)
         }
     }
 }
