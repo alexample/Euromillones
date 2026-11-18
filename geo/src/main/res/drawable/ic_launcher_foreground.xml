@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Marcador de mapa -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,28 C44,28 36,36 36,46 C36,60 54,80 54,80 C54,80 72,60 72,46 C72,36 64,28 54,28 Z" />
+    <path
+        android:fillColor="#0F766E"
+        android:pathData="M54,39 A7,7 0 1,1 53.99,39 Z" />
+</vector>

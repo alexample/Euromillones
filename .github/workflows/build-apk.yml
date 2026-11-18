@@ -31,11 +31,14 @@ jobs:
         run: |
           gradle assembleDebug --no-daemon
           cp app/build/outputs/apk/debug/app-debug.apk Euromillones.apk
+          cp geo/build/outputs/apk/debug/geo-debug.apk GeoLoteria.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: euromillones-apk
-          path: Euromillones.apk
+          path: |
+            Euromillones.apk
+            GeoLoteria.apk
 
       - name: Publicar en Releases (descarga directa desde el móvil)
         uses: softprops/action-gh-release@v2
@@ -43,4 +46,6 @@ jobs:
           tag_name: ultima
           name: Euromillones (última versión)
           make_latest: true
-          files: Euromillones.apk
+          files: |
+            Euromillones.apk
+            GeoLoteria.apk

@@ -1,0 +1,255 @@
+package com.geoloteria.app
+
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
+private val Teal = Color(0xFF0F766E)
+private val HitGreen = Color(0xFF16A34A)
+private val es = Locale.forLanguageTag("es-ES")
+private val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            MaterialTheme(colorScheme = lightColorScheme(primary = Teal, onPrimary = Color.White)) { App() }
+        }
+    }
+}
+
+private fun km(x: Double) = String.format(es, "%.2f km", x)
+private fun coord(x: Double) = String.format(Locale.US, "%.5f", x)
+private fun pct(x: Double) = String.format(es, "%.2f %%", x * 100)
+private fun thousands(x: Long) = String.format(es, "%,d", x)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun App(vm: GeoViewModel = viewModel()) {
+    val s by vm.state.collectAsStateWithLifecycle()
+    val ctx = LocalContext.current
+
+    // Permiso de notificaciones (Android 13+)
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    val openMap: (Draw) -> Unit = { d ->
+        val uri = Uri.parse("geo:${coord(d.lat)},${coord(d.lon)}?q=${coord(d.lat)},${coord(d.lon)}(${Uri.encode(d.number)})")
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("GeoLotería") },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Teal, titleContentColor = Color.White),
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item {
+                Text(
+                    if (s.ready) "Cada número de la Lotería Nacional (00000-99999) recibe una coordenada al azar dentro de España. " +
+                        "Si cae en un núcleo urbano (${thousands(s.nucleos.toLong())} poblaciones de más de 500 habitantes), te aviso."
+                    else "Cargando mapa de España y núcleos urbanos…",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            // ---------- Último número ----------
+            item {
+                val d = s.last
+                Card(
+                    Modifier.fillMaxWidth().clickable(enabled = d != null) { d?.let(openMap) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (d?.isHit == true) HitGreen.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        if (d == null) {
+                            Text("Pulsa «Generar» para empezar", style = MaterialTheme.typography.bodyMedium)
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(d.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.displaySmall)
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    if (d.isHit) "¡EN NÚCLEO\nURBANO!" else "Fuera de\nnúcleo",
+                                    color = if (d.isHit) HitGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            }
+                            Text("${coord(d.lat)}, ${coord(d.lon)}", fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Más cercano: ${d.nearest.name} (${d.nearest.region}) a ${km(d.distanceKm)} · " +
+                                    "casco urbano ${km(d.nearest.radiusKm)}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text("Toca para verlo en el mapa", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+
+            // ---------- Controles ----------
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = s.ready && !s.running, onClick = vm::generateOne) { Text("Generar uno") }
+                    Button(
+                        enabled = s.ready,
+                        onClick = vm::toggleAuto,
+                    ) { Text(if (s.running) "Parar" else "Automático") }
+                    OutlinedButton(onClick = vm::clear) { Text("Borrar") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Por segundo:", style = MaterialTheme.typography.bodySmall)
+                    SPEEDS.forEach { sp ->
+                        FilterChip(selected = s.speed == sp, onClick = { vm.setSpeed(sp) }, label = { Text("$sp") })
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = s.stopOnHit, onCheckedChange = vm::setStopOnHit)
+                    Text("  Parar al encontrar uno", style = MaterialTheme.typography.bodySmall)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = s.notify, onCheckedChange = vm::setNotify)
+                    Text("  Avisar con notificación y vibración", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            // ---------- Estadísticas ----------
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Stat("Generados", thousands(s.total))
+                        Stat("En núcleo", thousands(s.hitCount))
+                        Stat("Tasa", if (s.total > 0) pct(s.hitCount.toDouble() / s.total) else "–")
+                    }
+                }
+                Text(
+                    "Se espera que ~2,7 % de los puntos caigan en un núcleo urbano (el suelo urbano es una parte pequeña de España).",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+
+            // ---------- Aciertos ----------
+            item {
+                Text("Aciertos · ${s.hits.size}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp))
+            }
+            items(s.hits, key = { "h-${it.draw.id}" }) { h ->
+                Card(Modifier.fillMaxWidth().clickable { openMap(h.draw) },
+                    colors = CardDefaults.cardColors(containerColor = HitGreen.copy(alpha = 0.10f))) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(h.draw.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium, modifier = Modifier.width(76.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("${h.draw.nearest.name} · ${h.draw.nearest.region}", fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium)
+                            Text("${coord(h.draw.lat)}, ${coord(h.draw.lon)} · a ${km(h.draw.distanceKm)}",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(h.time.format(timeFmt), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            // ---------- Últimos generados ----------
+            item {
+                Text("Últimos generados", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp))
+            }
+            items(s.recent, key = { "r-${it.id}" }) { d ->
+                Row(Modifier.fillMaxWidth().clickable { openMap(d) }.padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(d.number, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(64.dp))
+                    Text(
+                        "${coord(d.lat)}, ${coord(d.lon)}",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (d.isHit) "✓ ${d.nearest.name}" else "${km(d.distanceKm)}",
+                        color = if (d.isHit) HitGreen else Color.Unspecified,
+                        fontWeight = if (d.isHit) FontWeight.Bold else FontWeight.Normal,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+            item {
+                TextButton(onClick = {}) {
+                    Text("Datos: contorno Natural Earth · poblaciones GeoNames", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Stat(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+        Text(label, style = MaterialTheme.typography.labelSmall)
+    }
+}
