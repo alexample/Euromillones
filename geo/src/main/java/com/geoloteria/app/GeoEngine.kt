@@ -192,7 +192,7 @@ object GeoEngine {
         s.watchNumbers.firstOrNull { w -> if (w.length == 5) d.number == w else d.number.endsWith(w) }?.let { w ->
             return if (w.length == 5) "Ha salido el número $w" else "Número terminado en $w"
         }
-        val town = norm(d.nearest.name)
+        val town = d.nearest.key
         s.watchTowns.firstOrNull { norm(it) == town }?.let { t ->
             return "Ha salido en $t" + if (d.isHit) " (en el núcleo urbano)" else " (fuera del núcleo)"
         }
@@ -252,7 +252,8 @@ object GeoEngine {
     /** Añade una población; se acepta solo si existe en la lista de núcleos. */
     fun addWatchTown(raw: String): String? {
         val g = geo ?: return "Cargando datos…"
-        val match = g.nucleos.firstOrNull { norm(it.name) == norm(raw) } ?: return "No encuentro esa población"
+        val k = norm(raw)
+        val match = g.nucleos.firstOrNull { it.key == k } ?: return "No encuentro esa población"
         if (_state.value.watchTowns.any { norm(it) == norm(match.name) }) return null
         _state.update { it.copy(watchTowns = it.watchTowns + match.name) }
         saveWatch()
@@ -269,8 +270,8 @@ object GeoEngine {
         val g = geo ?: return emptyList()
         val q = norm(query)
         if (q.length < 2) return emptyList()
-        return g.nucleos.asSequence().filter { norm(it.name).contains(q) }
-            .sortedWith(compareByDescending<Nucleo> { norm(it.name).startsWith(q) }.thenByDescending { it.population })
+        return g.nucleos.asSequence().filter { it.key.contains(q) }
+            .sortedWith(compareByDescending<Nucleo> { it.key.startsWith(q) }.thenByDescending { it.population })
             .take(limit).toList()
     }
 
@@ -287,10 +288,19 @@ object GeoEngine {
 
     /** Busca en TODO lo generado (no solo en los últimos 50). Devuelve como mucho [limit] resultados. */
     fun search(query: String, limit: Int = 300): Pair<Int, List<Draw>> {
-        if (query.isBlank()) return 0 to emptyList()
-        val all = synchronized(history) { history.toList() }
-        val found = all.filter { matchesQuery(it, query) }
-        return found.size to found.take(limit)
+        val q = SearchQuery(query)
+        if (q.isEmpty) return 0 to emptyList()
+        var count = 0
+        val out = ArrayList<Draw>(minOf(limit, 64))
+        synchronized(history) {
+            for (d in history) {
+                if (q.matches(d)) {
+                    count++
+                    if (out.size < limit) out += d
+                }
+            }
+        }
+        return count to out
     }
 
     // ---------------- Radio de acción ----------------
@@ -509,11 +519,19 @@ internal fun norm(x: String): String =
     java.text.Normalizer.normalize(x.trim(), java.text.Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "").lowercase(Locale.ROOT)
 
-/** Solo dígitos → busca en el número; si no → en la ciudad (núcleo) o la comunidad. Sin tildes ni mayúsculas. */
-internal fun matchesQuery(d: Draw, query: String): Boolean {
-    val q = query.trim()
-    if (q.isEmpty()) return true
-    if (q.all { it.isDigit() }) return d.number.contains(q)
-    val nq = norm(q)
-    return norm(d.nearest.name).contains(nq) || norm(d.nearest.region).contains(nq)
+/**
+ * Búsqueda preparada una sola vez: solo dígitos → busca en el número; si no → en la ciudad o la comunidad
+ * (sin tildes ni mayúsculas, usando los nombres ya normalizados de cada núcleo).
+ */
+class SearchQuery(raw: String) {
+    private val q = raw.trim()
+    private val digits = q.isNotEmpty() && q.all { it.isDigit() }
+    private val nq = if (digits) "" else norm(q)
+    val isEmpty: Boolean get() = q.isEmpty()
+
+    fun matches(d: Draw): Boolean = when {
+        q.isEmpty() -> true
+        digits -> d.number.contains(q)
+        else -> d.nearest.key.contains(nq) || d.nearest.regionKey.contains(nq)
+    }
 }

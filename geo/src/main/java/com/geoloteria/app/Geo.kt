@@ -19,7 +19,11 @@ private val REGIONES = mapOf(
 fun regionEs(r: String): String = REGIONES[r] ?: r
 
 /** Población española (núcleo de más de 500 habitantes, datos de GeoNames). */
-data class Nucleo(val name: String, val lat: Double, val lon: Double, val population: Int, val region: String)
+data class Nucleo(val name: String, val lat: Double, val lon: Double, val population: Int, val region: String) {
+    /** Nombre y comunidad ya normalizados (sin tildes, minúsculas): se calculan una sola vez. */
+    val key: String by lazy { norm(name) }
+    val regionKey: String by lazy { norm(region) }
+}
 
 /**
  * Un número con su coordenada. [nearest] = el núcleo que "manda" en ese punto: aquel en cuyo radio cae

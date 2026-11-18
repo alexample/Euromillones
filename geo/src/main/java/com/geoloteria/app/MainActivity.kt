@@ -56,6 +56,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -74,6 +75,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.LocalDateTime
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -112,9 +116,21 @@ fun App(vm: GeoViewModel = viewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
-    val hits = remember(s.hits, query) { s.hits.filter { matchesQuery(it.draw, query) } }
-    // Con búsqueda: se busca en todo lo generado; sin búsqueda: los últimos 50
-    val searchResult = remember(query, s.historySize, s.total) { GeoEngine.search(query) }
+    val sq = remember(query) { SearchQuery(query) }
+    val hits = remember(s.hits, sq) { if (sq.isEmpty) s.hits else s.hits.filter { sq.matches(it.draw) } }
+    // Con búsqueda: se busca en todo lo generado, fuera de la pantalla, al dejar de escribir
+    // y cada 3 s (no con cada número nuevo); sin búsqueda: los últimos 50
+    val searchResult by produceState(0 to emptyList<Draw>(), query) {
+        if (query.isBlank()) {
+            value = 0 to emptyList()
+            return@produceState
+        }
+        delay(300)
+        while (true) {
+            value = withContext(Dispatchers.Default) { GeoEngine.search(query) }
+            delay(3_000)
+        }
+    }
     val recent = if (query.isBlank()) s.recent else searchResult.second
     var selected by remember { mutableStateOf<Draw?>(null) }
 
