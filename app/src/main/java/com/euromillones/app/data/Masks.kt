@@ -10,7 +10,7 @@ import java.time.LocalDate
  *   Unidad (última cifra):  L 0-2 · M 3-6 · H 7-9
  * Cada estrella en una letra: L 1-4 · M 5-8 · H 9-12
  *
- * Ejemplo: 7 23 35 44 48 + ★2 ★11  →  LH ML MM HM HH LH
+ * Ejemplo: 7 23 35 44 48 + ★2 ★11  →  LH MM MM HM HH LH
  * (los números van ordenados de menor a mayor; las estrellas al final)
  */
 enum class Level { L, M, H }
