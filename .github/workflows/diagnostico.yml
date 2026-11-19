@@ -1,0 +1,12 @@
+name: Diagnostico sol
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for i in 1 2; do
+            curl -sS -m 30 -o /tmp/x.json -w "HTTP %{http_code} size %{size_download}\n" https://services.swpc.noaa.gov/json/goes/primary/xrays-6-hour.json
+            sha256sum /tmp/x.json; head -c 300 /tmp/x.json; echo; tail -c 300 /tmp/x.json; echo
+            [ $i = 1 ] && sleep 70
+          done
