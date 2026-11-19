@@ -12,6 +12,7 @@ import re
 import sys
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
 
@@ -19,6 +20,8 @@ OUT = Path(__file__).resolve().parent.parent / "data" / "draws.json"
 URL = "https://www.euro-millions.com/results-history-{year}"
 UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36"
 FIRST_YEAR = 2004
+# Fuente de respaldo (últimos sorteos, XML de la Lotería Nacional británica)
+FALLBACK_URL = "https://www.national-lottery.co.uk/results/euromillions/draw-history/csv"
 
 ROW_SPLIT = re.compile(r'<tr class="resultRow"')
 DATE_RE = re.compile(r'href="/results/(\d{2})-(\d{2})-(\d{4})"')
@@ -27,7 +30,7 @@ STAR_RE = re.compile(r'class="resultBall lucky-star[^"]*">\s*(\d+)\s*<')
 JACKPOT_RE = re.compile(r'data-title="Jackpot">\s*<strong[^>]*>([^<]+)<', re.S)
 
 
-def fetch(url: str, attempts: int = 6) -> str:
+def fetch(url: str, attempts: int = 4) -> str:
     last = None
     for i in range(attempts):
         try:
@@ -63,7 +66,39 @@ def parse(html: str) -> list[dict]:
     return draws
 
 
+def parse_fallback(xml_text: str) -> list[dict]:
+    """Lee el XML de la Lotería Nacional británica: cada <game> es un sorteo."""
+    root = ET.fromstring(xml_text)
+    out = []
+    for game in root.iter("game"):
+        d = game.findtext(".//draw-date")
+        balls = sorted(int(b.text) for b in game.findall(".//balls/ball") if b.text)
+        stars = sorted(int(b.text) for b in game.findall(".//balls/bonus-ball") if b.text and b.get("type") == "luckystar")
+        if not d or len(balls) != 5 or len(stars) != 2:
+            continue
+        out.append({"date": d[:10], "numbers": balls, "stars": stars, "jackpot": None})
+    return out
+
+
+def fetch_year(year: int, current: int) -> list[dict]:
+    """Año desde euro-millions.com; si falla el año en curso, se usa la fuente de respaldo."""
+    try:
+        return parse(fetch(URL.format(year=year)))
+    except Exception as e:  # noqa: BLE001
+        if year != current:
+            raise
+        print(f"  euro-millions.com no responde ({e}); usando la fuente de respaldo…", flush=True)
+        found = parse_fallback(fetch(FALLBACK_URL))
+        print(f"  respaldo: {len(found)} sorteos recientes", flush=True)
+        return found
+
+
 def main() -> int:
+    if "--probar-respaldo" in sys.argv:
+        found = parse_fallback(fetch(FALLBACK_URL))
+        print(f"Respaldo OK: {len(found)} sorteos, el último {found[0] if found else '—'}")
+        return 0 if found else 1
+
     full = "--full" in sys.argv
     existing: dict[str, dict] = {}
     if OUT.exists() and not full:
@@ -82,11 +117,14 @@ def main() -> int:
 
     for year in range(start, today.year + 1):
         print(f"Año {year}…", flush=True)
-        found = parse(fetch(URL.format(year=year)))
+        found = fetch_year(year, today.year)
         print(f"  {len(found)} sorteos", flush=True)
         if not found and year < today.year:
             raise RuntimeError(f"El año {year} no devolvió sorteos: ¿ha cambiado la web?")
         for d in found:
+            old = existing.get(d["date"])
+            if old and not d.get("jackpot"):
+                d["jackpot"] = old.get("jackpot")
             existing[d["date"]] = d
         time.sleep(1)
 
