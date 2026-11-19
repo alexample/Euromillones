@@ -1,0 +1,11 @@
+name: Diagnostico fuentes
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          UA="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36"
+          for u in "https://www.national-lottery.co.uk/results/euromillions/draw-history/csv" "https://www.lottery.co.uk/euromillions/results/archive-2026" "https://www.euro-millions.com/results-history-2026"; do
+            echo "=== $u"; curl -sSL -m 40 -A "$UA" -o /tmp/b -w "HTTP %{http_code} size %{size_download}\n" "$u" || true; head -c 600 /tmp/b; echo
+          done
