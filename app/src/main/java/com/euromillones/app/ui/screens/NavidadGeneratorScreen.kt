@@ -45,6 +45,8 @@ import com.euromillones.app.data.historicDigitHotCold
 import com.euromillones.app.data.navidadAllowed
 import com.euromillones.app.data.navidadCount
 import com.euromillones.app.data.navidadGenerate
+import com.euromillones.app.data.SolarEntropy
+import com.euromillones.app.ui.components.EntropyInfo
 import com.euromillones.app.ui.components.HeaderCell
 import com.euromillones.app.ui.components.TableCell
 import com.euromillones.app.ui.components.TextCell
@@ -68,7 +70,7 @@ fun NavidadGeneratorScreen(initLmh: String, initCtf: String, gordos: List<Gordo>
     val hist = remember(gordos, window) { historicDigitHotCold(gordos, window) }
     val allowed = remember(lmh, ctf, hc) { navidadAllowed(lmh, ctf, hc) }
     val count = remember(allowed) { navidadCount(allowed) }
-    LaunchedEffect(allowed, amount) { numbers = navidadGenerate(allowed, amount) }
+    LaunchedEffect(allowed, amount) { numbers = navidadGenerate(allowed, amount, SolarEntropy.random()) }
 
     val matches = remember(gordos, hist, lmh, ctf) {
         gordos.filterIndexed { i, g ->
@@ -135,6 +137,7 @@ fun NavidadGeneratorScreen(initLmh: String, initCtf: String, gordos: List<Gordo>
 
         item {
             Text("Generar números", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            EntropyInfo()
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Cuántos:", style = MaterialTheme.typography.bodySmall)
                 listOf(1, 5, 10, 20).forEach { n ->
@@ -142,7 +145,7 @@ fun NavidadGeneratorScreen(initLmh: String, initCtf: String, gordos: List<Gordo>
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(enabled = count > 0, onClick = { numbers = navidadGenerate(allowed, amount) }) { Text("Generar") }
+                Button(enabled = count > 0, onClick = { numbers = navidadGenerate(allowed, amount, SolarEntropy.random()) }) { Text("Generar") }
                 OutlinedButton(
                     enabled = numbers.isNotEmpty(),
                     onClick = { clipboard.setText(AnnotatedString(numbers.joinToString("\n"))) },

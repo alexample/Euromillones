@@ -8,6 +8,7 @@ import com.euromillones.app.data.DrawRepository
 import com.euromillones.app.data.Gordo
 import com.euromillones.app.data.NavidadRepository
 import com.euromillones.app.data.SearchQuery
+import com.euromillones.app.data.SolarEntropy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +39,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val query: StateFlow<SearchQuery> = _query.asStateFlow()
 
     init {
+        SolarEntropy.start()
         viewModelScope.launch {
             val cached = repo.loadCache()
             _state.update { it.copy(draws = cached) }

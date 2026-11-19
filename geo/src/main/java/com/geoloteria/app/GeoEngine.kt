@@ -126,6 +126,7 @@ object GeoEngine {
             android.app.NotificationManager.IMPORTANCE_HIGH)
         app.getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(ch)
         db = DrawDb(app)
+        SolarEntropy.start()
         scope.launch {
             val g = Geo(app)
             geo = g
@@ -148,8 +149,8 @@ object GeoEngine {
     private fun next(g: Geo): Draw? {
         val s = _state.value
         return when (s.mode) {
-            GenMode.CIUDADES -> g.drawInCity(nextId++, s.radius, s.pick)
-            GenMode.ESPANA -> g.draw(nextId++, s.radius)
+            GenMode.CIUDADES -> g.drawInCity(nextId++, s.radius, s.pick, SolarEntropy.random())
+            GenMode.ESPANA -> g.draw(nextId++, s.radius, SolarEntropy.random())
         }
     }
 

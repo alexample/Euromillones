@@ -48,6 +48,8 @@ import com.euromillones.app.data.HotCold
 import com.euromillones.app.data.Mask
 import com.euromillones.app.data.MaskPool
 import com.euromillones.app.data.STAR_PAIRS
+import com.euromillones.app.data.SolarEntropy
+import com.euromillones.app.ui.components.EntropyInfo
 import com.euromillones.app.data.Temp
 import com.euromillones.app.data.TempCount
 import com.euromillones.app.data.buildPool
@@ -143,7 +145,7 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
     val starTempOf: ((Int) -> String)? = if (filterOn) ({ s: Int -> hc.tempStar(s).name }) else null
     // Cada vez que cambian los filtros (o al entrar) se generan combinaciones nuevas
     LaunchedEffect(pool) {
-        pool?.let { combos = generate(it, amount, if (avoidDrawn) drawnPacked else emptySet()) }
+        pool?.let { combos = generate(it, amount, if (avoidDrawn) drawnPacked else emptySet(), SolarEntropy.random()) }
     }
     val matches = remember(draws, target, temps, historic, auto, autoSel, starSel) {
         draws.filter { d ->
@@ -272,6 +274,7 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
         // ---- Generador ----
         item {
             Text("Generar combinaciones", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            EntropyInfo()
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Cuántas:", style = MaterialTheme.typography.bodySmall)
                 listOf(1, 5, 10, 20).forEach { n ->
@@ -286,7 +289,7 @@ fun GeneratorScreen(target: GenTarget, draws: List<Draw>, window: Int, modifier:
                 Button(
                     enabled = pool != null && (pool?.total ?: 0L) > 0,
                     onClick = {
-                        pool?.let { combos = generate(it, amount, if (avoidDrawn) drawnPacked else emptySet()) }
+                        pool?.let { combos = generate(it, amount, if (avoidDrawn) drawnPacked else emptySet(), SolarEntropy.random()) }
                     },
                 ) { Text("Generar") }
                 OutlinedButton(

@@ -285,6 +285,8 @@ fun App(vm: GeoViewModel = viewModel()) {
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
+                        Spacer(Modifier.height(6.dp))
+                        EntropyInfo()
                     }
                 }
             }
