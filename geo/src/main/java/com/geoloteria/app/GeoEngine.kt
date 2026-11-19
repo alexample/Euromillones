@@ -48,7 +48,13 @@ data class GeoState(
     val stopOnAlert: Boolean = false,
     val mode: GenMode = GenMode.CIUDADES,
     val pick: CityPick = CityPick.POBLACION,
+    // Bloques de 400.000
+    val block: BlockProgress? = null,
+    val blocks: List<BlockReport> = emptyList(),
 )
+
+/** Progreso del bloque en curso. */
+data class BlockProgress(val done: Int, val total: Int, val startedAt: Long, val label: String = "Generando")
 
 enum class RankKind(val title: String) { CIUDADES("Ciudades"), NUMEROS("Números"), COMUNIDADES("Comunidades") }
 
@@ -131,7 +137,7 @@ object GeoEngine {
             val g = Geo(app)
             geo = g
             load(g)
-            _state.update { it.copy(ready = true, nucleos = g.nucleos.size) }
+            _state.update { it.copy(ready = true, nucleos = g.nucleos.size, blocks = BlockStore.list(app)) }
             estimate()
             // Cada segundo se guardan los números nuevos; cada 15 s los avisos
             var tick = 0
@@ -349,6 +355,231 @@ object GeoEngine {
         val count = db.searchCount(query, hitsOnly)
         val page = db.search(query, g.nucleos, hitsOnly, limit).map { it.first }
         return count to page
+    }
+
+    // ---------------- Bloques de 400.000 ----------------
+
+    private var blockJob: Job? = null
+
+    fun refreshBlocks() {
+        scope.launch(Dispatchers.IO) { _state.update { it.copy(blocks = BlockStore.list(app)) } }
+    }
+
+    /** Genera un bloque completo lo más rápido posible, guardándolo en el móvil mientras se crea. */
+    fun startBlock(size: Int = BLOCK_SIZE) {
+        val g = geo ?: return
+        if (_state.value.block != null) return
+        val s0 = _state.value
+        val cfg = s0.radius
+        val mode = s0.mode
+        val pick = s0.pick
+        val started = System.currentTimeMillis()
+        val id = "bloque_" + java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(java.util.Date(started))
+        _state.update { it.copy(block = BlockProgress(0, size, started)) }
+        GeneratorService.start(app)
+        blockJob = scope.launch(Dispatchers.Default) {
+            val file = BlockStore.dataFile(app, id)
+            val result = runCatching {
+                val counter = BlockCounter(g.nucleos)
+                BlockStore.openWriter(file).use { w ->
+                    w.write(BlockStore.metaLine(mode, pick, cfg)); w.newLine()
+                    w.write(BlockStore.header()); w.newLine()
+                    val sb = StringBuilder(160)
+                    for (i in 0 until size) {
+                        if (!isActive) throw kotlinx.coroutines.CancellationException()
+                        val seed = SolarEntropy.status.value.seed
+                        val rnd = SolarEntropy.random()
+                        val d = when (mode) {
+                            GenMode.CIUDADES -> g.drawInCity(0, cfg, pick, rnd)
+                            GenMode.ESPANA -> g.draw(0, cfg, rnd)
+                        } ?: error("No hay ciudades con radio mayor que 0")
+                        val hex = seed?.hex ?: "azar-local"
+                        val ni = g.index[d.nearest] ?: -1
+                        counter.add(d.number, ni, hex, seed?.dataTime)
+                        sb.setLength(0)
+                        sb.append(d.number).append(';').append(r5(d.lat)).append(';').append(r5(d.lon)).append(';')
+                            .append(d.nearest.name.replace(";", ",")).append(';').append(d.nearest.region).append(';')
+                            .append(d.nearest.population).append(';').append(r3(d.distanceKm)).append(';')
+                            .append(r3(d.radiusKm)).append(';').append(if (d.isHit) "1" else "0").append(';').append(hex)
+                        w.write(sb.toString()); w.newLine()
+                        if (i % 2000 == 0) _state.update { it.copy(block = it.block?.copy(done = i)) }
+                    }
+                }
+                val rep = counter.report(id, started, System.currentTimeMillis() - started, mode, pick, cfg, imported = false)
+                BlockStore.saveReport(app, rep)
+                rep
+            }
+            result.onFailure { file.delete() }
+            _state.update {
+                it.copy(
+                    block = null,
+                    blocks = BlockStore.list(app),
+                    message = result.fold(
+                        { r -> "Bloque terminado: ${r.distinct} números distintos de 100.000 · ${r.anomalies} anomalías." },
+                        { e -> if (e is kotlinx.coroutines.CancellationException) "Bloque cancelado." else "Error en el bloque: ${e.message}" },
+                    ),
+                )
+            }
+            if (!_state.value.running) GeneratorService.stop(app)
+        }
+    }
+
+    fun cancelBlock() {
+        blockJob?.cancel()
+    }
+
+    fun deleteBlock(id: String) {
+        scope.launch(Dispatchers.IO) {
+            BlockStore.delete(app, id)
+            _state.update { it.copy(blocks = BlockStore.list(app)) }
+        }
+    }
+
+    /** Copia el CSV comprimido del bloque (se abre con 7-Zip/WinRAR y luego Excel). */
+    fun exportBlockCsv(id: String, uri: Uri) {
+        scope.launch(Dispatchers.IO) {
+            val r = runCatching { app.contentResolver.openOutputStream(uri)?.use { BlockStore.copyData(app, id, it) } ?: error("no se pudo abrir") }
+            _state.update { it.copy(message = r.fold({ "Bloque guardado como CSV comprimido." }, { e -> "Error: ${e.message}" })) }
+        }
+    }
+
+    /** Excel del bloque: hoja con los 400.000 números + hojas del informe estadístico. */
+    fun exportBlockExcel(id: String, uri: Uri) {
+        scope.launch(Dispatchers.IO) {
+            _state.update { it.copy(block = BlockProgress(0, 1, System.currentTimeMillis(), "Exportando a Excel")) }
+            val rep = BlockStore.list(app).firstOrNull { it.id == id }
+            val r = runCatching {
+                app.contentResolver.openOutputStream(uri)?.use { out ->
+                    val sheets = ArrayList<Xlsx.Sheet>()
+                    sheets += Xlsx.Sheet("Numeros") { emit ->
+                        BlockStore.openReader(BlockStore.dataFile(app, id).inputStream()).use { rd ->
+                            rd.lineSequence().filter { !it.startsWith("#") }.forEachIndexed { i, line ->
+                                val p = line.split(";")
+                                if (i == 0) emit(p)
+                                else emit(listOf<Any?>(p[0], p.getOrNull(1)?.toDoubleOrNull(), p.getOrNull(2)?.toDoubleOrNull(),
+                                    p.getOrNull(3), p.getOrNull(4), p.getOrNull(5)?.toIntOrNull(), p.getOrNull(6)?.toDoubleOrNull(),
+                                    p.getOrNull(7)?.toDoubleOrNull(), p.getOrNull(8), p.getOrNull(9)))
+                            }
+                        }
+                    }
+                    if (rep != null) sheets += reportSheets(rep)
+                    Xlsx.write(out, sheets)
+                } ?: error("no se pudo abrir")
+            }
+            _state.update {
+                it.copy(block = null, message = r.fold({ "Bloque exportado a Excel." }, { e -> "Error al exportar: ${e.message}" }))
+            }
+        }
+    }
+
+    private fun reportSheets(r: BlockReport): List<Xlsx.Sheet> {
+        fun rows(list: List<StatRow>) = listOf(listOf<Any?>("Valor", "Detalle", "Veces", "Esperado", "z", "Anómalo")) +
+            list.map { listOf<Any?>(it.label, it.detail, it.count, if (it.expected.isNaN()) null else round2(it.expected), round2(it.z), if (it.anomalous) "SÍ" else "") }
+        val resumen = listOf(
+            listOf<Any?>("Bloque", r.id), listOf<Any?>("Números", r.n),
+            listOf<Any?>("Modo", r.mode + " " + r.pick), listOf<Any?>("Radios (km)", r.radius),
+            listOf<Any?>("Distintos", r.distinct), listOf<Any?>("Distintos esperados", round2(r.expectedDistinct)),
+            listOf<Any?>("z de los que no salieron", round2(r.zerosZ)),
+            listOf<Any?>("Chi² uniformidad", round2(r.chi2)), listOf<Any?>("z del chi²", round2(r.chi2Z)),
+            listOf<Any?>("Esperado por número", round2(r.expectedPerNumber)), listOf<Any?>("Máximo de veces", r.maxCount),
+            listOf<Any?>("Umbral de anomalía (veces)", r.highThreshold), listOf<Any?>("Anomalías totales", r.anomalies),
+        ) + listOf(listOf<Any?>("")) + listOf(listOf<Any?>("Hash solar", "Hora dato UTC", "Números")) +
+            r.seeds.map { listOf<Any?>(it.hex, it.dataTime, it.count) }
+        return listOf(
+            Xlsx.sheet("Informe", resumen),
+            Xlsx.sheet("Mas repetidos", rows(r.anomalousNumbers + r.topNumbers.filter { t -> r.anomalousNumbers.none { it.label == t.label } })),
+            Xlsx.sheet("Cifras", rows(r.digitRows)),
+            Xlsx.sheet("Ciudades", rows(r.cityRows)),
+            Xlsx.sheet("Comunidades", rows(r.regionRows)),
+        )
+    }
+
+    /** Importa un bloque (CSV o CSV comprimido exportado por la app) y recalcula su estadística. */
+    fun importBlock(uri: Uri) {
+        val g = geo ?: return
+        if (_state.value.block != null) return
+        _state.update { it.copy(block = BlockProgress(0, BLOCK_SIZE, System.currentTimeMillis(), "Importando")) }
+        scope.launch(Dispatchers.IO) {
+            val started = System.currentTimeMillis()
+            val id = "importado_" + java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(java.util.Date(started))
+            val file = BlockStore.dataFile(app, id)
+            val byName = g.nucleos.withIndex().associate { (i, n) -> (n.key + "|" + n.regionKey) to i }
+            val byTown = g.nucleos.withIndex().groupBy({ it.value.key }, { it.index })
+            val result = runCatching {
+                var mode: GenMode? = null
+                var pick: CityPick? = null
+                var cfg = _state.value.radius
+                val counter = BlockCounter(g.nucleos)
+                val input = app.contentResolver.openInputStream(uri) ?: error("no se pudo abrir el fichero")
+                BlockStore.openReader(input).use { rd ->
+                    BlockStore.openWriter(file).use { w ->
+                        var header: List<String>? = null
+                        var cols = IntArray(0)
+                        var delim: String? = null
+                        rd.lineSequence().forEach { line ->
+                            if (line.startsWith("#geoloteria")) {
+                                line.split(";").forEach { kv ->
+                                    val (k, v) = kv.split("=", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+                                    when (k) {
+                                        "modo" -> mode = runCatching { GenMode.valueOf(v) }.getOrNull()
+                                        "eleccion" -> pick = runCatching { CityPick.valueOf(v) }.getOrNull()
+                                        "radios" -> cfg = RadiusConfig.decode(v)
+                                    }
+                                }
+                                w.write(line); w.newLine()
+                                return@forEach
+                            }
+                            if (delim == null && "numero" in norm(line)) {
+                                delim = when {
+                                    ';' in line -> ";"
+                                    '\t' in line -> "\t"
+                                    else -> ","
+                                }
+                            }
+                            val p = line.split(delim ?: ";").map { it.trim().trim('"') }
+                            if (header == null) {
+                                val h = p.map { norm(it) }
+                                if ("numero" !in h) return@forEach
+                                header = h
+                                cols = intArrayOf(h.indexOf("numero"), h.indexOf("latitud"), h.indexOf("longitud"),
+                                    h.indexOf("ciudad"), h.indexOf("comunidad"), h.indexOf("semilla"))
+                                w.write(BlockStore.header()); w.newLine()
+                                return@forEach
+                            }
+                            val num = p.getOrNull(cols[0])?.filter { it.isDigit() }?.takeIf { it.isNotEmpty() && it.length <= 5 }
+                                ?.padStart(5, '0') ?: return@forEach
+                            val lat = p.getOrNull(cols[1])?.toDoubleOrNull()
+                            val lon = p.getOrNull(cols[2])?.toDoubleOrNull()
+                            val town = p.getOrNull(cols[3]).orEmpty()
+                            val region = p.getOrNull(cols[4]).orEmpty()
+                            var ni = byName[norm(town) + "|" + norm(region)] ?: byTown[norm(town)]?.firstOrNull() ?: -1
+                            if (ni < 0 && lat != null && lon != null) ni = g.index[g.evaluate(0, num, lat, lon, cfg).nearest] ?: -1
+                            val hex = p.getOrNull(cols[5])?.ifBlank { null } ?: "importado"
+                            counter.add(num, ni, hex, null)
+                            val n = g.nucleos.getOrNull(ni)
+                            w.write("$num;${lat ?: ""};${lon ?: ""};${n?.name ?: town};${n?.region ?: region};${n?.population ?: ""};;;;$hex")
+                            w.newLine()
+                            if (counter.n % 5000 == 0) _state.update { it.copy(block = it.block?.copy(done = counter.n)) }
+                        }
+                    }
+                }
+                if (counter.n == 0) error("no encontré filas con la columna «numero»")
+                val rep = counter.report(id, started, System.currentTimeMillis() - started, mode, pick, cfg, imported = true)
+                BlockStore.saveReport(app, rep)
+                rep
+            }
+            result.onFailure { file.delete() }
+            _state.update {
+                it.copy(
+                    block = null,
+                    blocks = BlockStore.list(app),
+                    message = result.fold(
+                        { r -> "Bloque importado: ${r.n} números · ${r.anomalies} anomalías." },
+                        { e -> "Error al importar el bloque: ${e.message}" },
+                    ),
+                )
+            }
+        }
     }
 
     // ---------------- Ranking ----------------
@@ -616,3 +847,6 @@ class SearchQuery(raw: String) {
         else -> d.nearest.key.contains(nq) || d.nearest.regionKey.contains(nq)
     }
 }
+
+private fun r5(x: Double) = Math.round(x * 100000) / 100000.0
+private fun r3(x: Double) = Math.round(x * 1000) / 1000.0

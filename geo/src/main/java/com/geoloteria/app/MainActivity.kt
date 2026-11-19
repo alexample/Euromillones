@@ -161,6 +161,22 @@ fun App(vm: GeoViewModel = viewModel()) {
     var showRadius by rememberSaveable { mutableStateOf(false) }
     var showWatch by rememberSaveable { mutableStateOf(true) }
     var showRanking by rememberSaveable { mutableStateOf(false) }
+    var showBlocks by rememberSaveable { mutableStateOf(true) }
+    // Informe de bloque abierto (pantalla completa) y bloque pendiente de exportar
+    var reportId by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(enabled = reportId != null) { reportId = null }
+    var blockExportId by rememberSaveable { mutableStateOf<String?>(null) }
+    val blockExcelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(XLSX_MIME)) { uri ->
+        val id = blockExportId
+        if (uri != null && id != null) vm.exportBlockExcel(id, uri)
+    }
+    val blockCsvLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/gzip")) { uri ->
+        val id = blockExportId
+        if (uri != null && id != null) vm.exportBlockCsv(id, uri)
+    }
+    val blockImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::importBlock)
+    }
 
     // Al pulsar un número: se copia y se abre el buscador oficial de administraciones
     val clipboard = LocalClipboardManager.current
@@ -180,10 +196,18 @@ fun App(vm: GeoViewModel = viewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(sellerNumber?.let { "Dónde venden el $it" } ?: "GeoLotería") },
+                title = {
+                    Text(
+                        when {
+                            sellerNumber != null -> "Dónde venden el $sellerNumber"
+                            reportId != null -> "Informe del bloque"
+                            else -> "GeoLotería"
+                        },
+                    )
+                },
                 navigationIcon = {
-                    if (sellerNumber != null) {
-                        IconButton(onClick = { sellerNumber = null }) {
+                    if (sellerNumber != null || reportId != null) {
+                        IconButton(onClick = { sellerNumber = null; reportId = null }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
                         }
                     }
@@ -203,6 +227,13 @@ fun App(vm: GeoViewModel = viewModel()) {
         sellerNumber?.let { n ->
             SellerWeb(n, Modifier.fillMaxSize().padding(padding))
             return@Scaffold
+        }
+        reportId?.let { id ->
+            val r = s.blocks.firstOrNull { it.id == id }
+            if (r != null) {
+                BlockReportScreen(r, Modifier.fillMaxSize().padding(padding))
+                return@Scaffold
+            }
         }
         selected?.let { d ->
             AlertDialog(
@@ -368,6 +399,22 @@ fun App(vm: GeoViewModel = viewModel()) {
                     Switch(checked = s.vibrate, onCheckedChange = vm::setVibrate)
                     Text("  Vibrar al encontrar uno", style = MaterialTheme.typography.bodySmall)
                 }
+            }
+
+            // ---------- Bloques de 400.000 ----------
+            item {
+                BlocksCard(
+                    s = s,
+                    expanded = showBlocks,
+                    onToggle = { showBlocks = !showBlocks },
+                    onGenerate = vm::startBlock,
+                    onCancel = vm::cancelBlock,
+                    onImport = { blockImportLauncher.launch(arrayOf("application/gzip", "text/*", "application/octet-stream", "*/*")) },
+                    onOpen = { reportId = it },
+                    onExcel = { id -> blockExportId = id; blockExcelLauncher.launch("$id.xlsx") },
+                    onCsv = { id -> blockExportId = id; blockCsvLauncher.launch("$id.csv.gz") },
+                    onDelete = vm::deleteBlock,
+                )
             }
 
             // ---------- Avisos con filtro ----------

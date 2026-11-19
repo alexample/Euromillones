@@ -45,6 +45,7 @@ class GeneratorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            GeoEngine.cancelBlock()
             GeoEngine.stop()
             return START_NOT_STICKY
         }
@@ -65,7 +66,8 @@ class GeneratorService : Service() {
             updater = CoroutineScope(Dispatchers.Default).launch {
                 while (isActive) {
                     delay(5_000)
-                    if (!GeoEngine.state.value.running) break
+                    val st = GeoEngine.state.value
+                    if (!st.running && st.block == null) break
                     getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification())
                 }
             }
@@ -77,7 +79,10 @@ class GeneratorService : Service() {
         .setSmallIcon(android.R.drawable.ic_dialog_map)
         .setContentTitle("GeoLotería generando")
         .setContentText(
-            GeoEngine.state.value.let { "Generados ${it.total} · en núcleo ${it.hitCount}" },
+            GeoEngine.state.value.let { st ->
+                st.block?.let { b -> "${b.label} bloque: ${b.done} de ${b.total}" }
+                    ?: "Generados ${st.total} · en núcleo ${st.hitCount}"
+            },
         )
         .setOngoing(true)
         .setSilent(true)
