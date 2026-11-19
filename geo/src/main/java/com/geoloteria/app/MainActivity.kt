@@ -243,11 +243,50 @@ fun App(vm: GeoViewModel = viewModel()) {
         ) {
             item {
                 Text(
-                    if (s.ready) "Cada número de la Lotería Nacional (00000-99999) recibe una coordenada al azar dentro de España. " +
-                        "Si cae en un núcleo urbano (${thousands(s.nucleos.toLong())} poblaciones de más de 500 habitantes), te aviso."
-                    else "Cargando mapa de España y núcleos urbanos…",
+                    when {
+                        !s.ready -> "Cargando mapa de España y núcleos urbanos…"
+                        s.mode == GenMode.CIUDADES ->
+                            "Cada número de la Lotería Nacional (00000-99999) cae siempre en una ciudad " +
+                                "(${thousands(s.nucleos.toLong())} poblaciones de más de 500 habitantes), en un punto al azar " +
+                                "dentro de su radio según sus habitantes."
+                        else ->
+                            "Cada número de la Lotería Nacional (00000-99999) recibe una coordenada al azar dentro de España. " +
+                                "Si cae en un núcleo urbano, cuenta como acierto."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
+            }
+
+            // ---------- Modo ----------
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("Dónde caen los números", fontWeight = FontWeight.Bold)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            GenMode.entries.forEach { m ->
+                                FilterChip(selected = s.mode == m, onClick = { vm.setMode(m) }, label = { Text(m.title) })
+                            }
+                        }
+                        if (s.mode == GenMode.CIUDADES) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Ciudad:", style = MaterialTheme.typography.bodySmall)
+                                CityPick.entries.forEach { p ->
+                                    FilterChip(selected = s.pick == p, onClick = { vm.setPick(p) }, label = { Text(p.title) })
+                                }
+                            }
+                            Text(
+                                if (s.pick == CityPick.POBLACION)
+                                    "Las ciudades con más habitantes salen más (Madrid mucho más que un pueblo pequeño)."
+                                else "Todas las poblaciones tienen la misma probabilidad, sean grandes o pequeñas.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                "El radio de cada ciudad es el de la tabla «Radio de acción»; un tramo a 0 km no sale nunca.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
             }
 
             // ---------- Último número ----------
@@ -430,7 +469,8 @@ fun App(vm: GeoViewModel = viewModel()) {
                     }
                 }
                 Text(
-                    "Con los radios actuales se espera que caiga en un núcleo urbano el " +
+                    if (s.mode == GenMode.CIUDADES) "En el modo «En ciudades» todos los números caen en una ciudad."
+                    else "Con los radios actuales se espera que caiga en un núcleo urbano el " +
                         (s.expectedRate?.let { pct(it) } ?: "… (calculando)") + " de los puntos.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),

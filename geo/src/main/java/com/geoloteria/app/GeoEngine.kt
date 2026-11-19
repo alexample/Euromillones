@@ -46,6 +46,8 @@ data class GeoState(
     val watchTowns: List<String> = emptyList(),     // nombre de la población
     val alerts: List<Alert> = emptyList(),
     val stopOnAlert: Boolean = false,
+    val mode: GenMode = GenMode.CIUDADES,
+    val pick: CityPick = CityPick.POBLACION,
 )
 
 enum class RankKind(val title: String) { CIUDADES("Ciudades"), NUMEROS("Números"), COMUNIDADES("Comunidades") }
@@ -116,6 +118,8 @@ object GeoEngine {
                 watchNumbers = prefs.getString("avisos_numeros", "").orEmpty().split("|").filter { x -> x.isNotBlank() },
                 watchTowns = prefs.getString("avisos_poblaciones", "").orEmpty().split("|").filter { x -> x.isNotBlank() },
                 stopOnAlert = prefs.getBoolean("avisos_parar", false),
+                mode = runCatching { GenMode.valueOf(prefs.getString("modo", null) ?: "") }.getOrDefault(GenMode.CIUDADES),
+                pick = runCatching { CityPick.valueOf(prefs.getString("eleccion", null) ?: "") }.getOrDefault(CityPick.POBLACION),
             )
         }
         val ch = android.app.NotificationChannel(ALERT_CHANNEL, "Avisos de número o población",
@@ -140,9 +144,31 @@ object GeoEngine {
 
     // ---------------- Generación ----------------
 
+    /** Un número nuevo según el modo elegido. */
+    private fun next(g: Geo): Draw? {
+        val s = _state.value
+        return when (s.mode) {
+            GenMode.CIUDADES -> g.drawInCity(nextId++, s.radius, s.pick)
+            GenMode.ESPANA -> g.draw(nextId++, s.radius)
+        }
+    }
+
     fun generateOne() {
         val g = geo ?: return
-        scope.launch { record(g.draw(nextId++, _state.value.radius)) }
+        scope.launch {
+            next(g)?.let(::record)
+                ?: _state.update { it.copy(message = "No hay ciudades con radio mayor que 0: revisa los radios.") }
+        }
+    }
+
+    fun setMode(m: GenMode) {
+        _state.update { it.copy(mode = m) }
+        app.getSharedPreferences("geoloteria", Context.MODE_PRIVATE).edit().putString("modo", m.name).apply()
+    }
+
+    fun setPick(p: CityPick) {
+        _state.update { it.copy(pick = p) }
+        app.getSharedPreferences("geoloteria", Context.MODE_PRIVATE).edit().putString("eleccion", p.name).apply()
     }
 
     fun toggleAuto() = if (_state.value.running) stop() else start()
@@ -158,7 +184,10 @@ object GeoEngine {
                 val tickMs = if (speed >= 10) 100L else 1000L / speed
                 val perTick = if (speed >= 10) speed / 10 else 1
                 repeat(perTick) {
-                    if (_state.value.running) record(g.draw(nextId++, _state.value.radius))
+                    if (_state.value.running) {
+                        val d = next(g)
+                        if (d != null) record(d) else stop()
+                    }
                 }
                 delay(tickMs)
             }

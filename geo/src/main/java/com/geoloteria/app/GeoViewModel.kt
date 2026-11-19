@@ -32,4 +32,6 @@ class GeoViewModel(app: Application) : AndroidViewModel(app) {
     fun setStopOnAlert(v: Boolean) = GeoEngine.setStopOnAlert(v)
     fun clearAlerts() = GeoEngine.clearAlerts()
     fun suggestTowns(q: String) = GeoEngine.suggestTowns(q)
+    fun setMode(m: GenMode) = GeoEngine.setMode(m)
+    fun setPick(p: CityPick) = GeoEngine.setPick(p)
 }

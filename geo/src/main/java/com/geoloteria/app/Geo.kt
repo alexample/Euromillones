@@ -8,6 +8,12 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
+/** Cómo se elige la ciudad en el modo "En ciudades". */
+enum class CityPick(val title: String) { POBLACION("Según habitantes"), IGUAL("Todas igual") }
+
+/** Dónde caen los números. */
+enum class GenMode(val title: String) { CIUDADES("En ciudades"), ESPANA("Cualquier punto de España") }
+
 /** Nombres de comunidades autónomas en español (GeoNames los da en inglés). */
 private val REGIONES = mapOf(
     "Andalusia" to "Andalucía", "Castille and León" to "Castilla y León", "Catalonia" to "Cataluña",
@@ -147,6 +153,56 @@ class Geo(context: Context) {
         val number = "%05d".format(rnd.nextInt(100_000))
         val (lat, lon) = randomPoint(rnd)
         return evaluate(id, number, lat, lon, cfg)
+    }
+
+    // ---------------- Modo "En ciudades" ----------------
+
+    /** Ciudades elegibles (radio > 0) y pesos acumulados, calculados una vez por configuración. */
+    private class CityTable(val cities: List<Nucleo>, val radius: DoubleArray, val cumulative: DoubleArray)
+
+    private var cityCache: Triple<RadiusConfig, CityPick, CityTable>? = null
+
+    private fun cityTable(cfg: RadiusConfig, pick: CityPick): CityTable {
+        cityCache?.let { (c, p, t) -> if (c == cfg && p == pick) return t }
+        val cities = nucleos.filter { cfg.radiusFor(it.population) > 0 }
+        val radius = DoubleArray(cities.size) { cfg.radiusFor(cities[it].population) }
+        val cum = DoubleArray(cities.size)
+        var acc = 0.0
+        for (i in cities.indices) {
+            acc += if (pick == CityPick.POBLACION) cities[i].population.toDouble() else 1.0
+            cum[i] = acc
+        }
+        return CityTable(cities, radius, cum).also { cityCache = Triple(cfg, pick, it) }
+    }
+
+    /**
+     * El número cae SIEMPRE en una ciudad: se elige la ciudad (según habitantes o todas igual) y,
+     * dentro de su radio, un punto al azar uniforme en superficie (si cae al mar se repite).
+     */
+    fun drawInCity(id: Long, cfg: RadiusConfig, pick: CityPick, rnd: Random = Random.Default): Draw? {
+        val t = cityTable(cfg, pick)
+        if (t.cities.isEmpty()) return null
+        val x = rnd.nextDouble(t.cumulative.last())
+        var i = t.cumulative.binarySearch(x)
+        if (i < 0) i = -i - 1
+        i = i.coerceIn(0, t.cities.lastIndex)
+        val city = t.cities[i]
+        val big = t.radius[i]
+        val number = "%05d".format(rnd.nextInt(100_000))
+        var lat = city.lat
+        var lon = city.lon
+        var dist = 0.0
+        repeat(20) {
+            val r = big * sqrt(rnd.nextDouble())
+            val a = rnd.nextDouble(0.0, 2 * Math.PI)
+            val la = city.lat + r * cos(a) / 110.57
+            val lo = city.lon + r * sin(a) / (111.32 * cos(Math.toRadians(city.lat)))
+            if (inSpain(lo, la)) {
+                lat = la; lon = lo; dist = r
+                return Draw(id, number, lat, lon, city, dist, big)
+            }
+        }
+        return Draw(id, number, lat, lon, city, dist, big)
     }
 
     /** Muestra fija de puntos para estimar la tasa de aciertos de una configuración. */
