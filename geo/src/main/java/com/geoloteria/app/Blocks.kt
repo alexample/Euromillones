@@ -254,6 +254,9 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
 object BlockStore {
     fun dir(ctx: Context): File = File(ctx.filesDir, "bloques").apply { mkdirs() }
     fun dataFile(ctx: Context, id: String) = File(dir(ctx), "$id.csv.gz")
+
+    /** CSV sin comprimir del bloque en tiempo real que se está llenando. */
+    fun liveFile(ctx: Context) = File(dir(ctx), "en_curso.csv")
     private fun reportFile(ctx: Context, id: String) = File(dir(ctx), "$id.json")
 
     fun list(ctx: Context): List<BlockReport> =

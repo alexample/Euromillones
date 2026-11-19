@@ -86,6 +86,7 @@ private val HitGreen = Color(0xFF16A34A)
 private val es = Locale.forLanguageTag("es-ES")
 private val timeFmt = DateTimeFormatter.ofPattern("dd/MM HH:mm")
 private const val PAGE = 500
+private const val LIVE_REPORT = "__en_vivo__"
 
 private val FILE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm")
 private const val XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -200,6 +201,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                     Text(
                         when {
                             sellerNumber != null -> "Dónde venden el $sellerNumber"
+                            reportId == LIVE_REPORT -> "Bloque en curso (en vivo)"
                             reportId != null -> "Informe del bloque"
                             else -> "GeoLotería"
                         },
@@ -229,7 +231,7 @@ fun App(vm: GeoViewModel = viewModel()) {
             return@Scaffold
         }
         reportId?.let { id ->
-            val r = s.blocks.firstOrNull { it.id == id }
+            val r = if (id == LIVE_REPORT) s.liveReport else s.blocks.firstOrNull { it.id == id }
             if (r != null) {
                 BlockReportScreen(r, Modifier.fillMaxSize().padding(padding))
                 return@Scaffold
@@ -414,6 +416,8 @@ fun App(vm: GeoViewModel = viewModel()) {
                     onExcel = { id -> blockExportId = id; blockExcelLauncher.launch("$id.xlsx") },
                     onCsv = { id -> blockExportId = id; blockCsvLauncher.launch("$id.csv.gz") },
                     onDelete = vm::deleteBlock,
+                    onOpenLive = { reportId = LIVE_REPORT },
+                    onCloseLive = vm::closeLiveNow,
                 )
             }
 

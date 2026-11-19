@@ -34,6 +34,7 @@ class GeoViewModel(app: Application) : AndroidViewModel(app) {
     fun suggestTowns(q: String) = GeoEngine.suggestTowns(q)
     fun setMode(m: GenMode) = GeoEngine.setMode(m)
     fun startBlock() = GeoEngine.startBlock()
+    fun closeLiveNow() = GeoEngine.closeLiveNow()
     fun cancelBlock() = GeoEngine.cancelBlock()
     fun deleteBlock(id: String) = GeoEngine.deleteBlock(id)
     fun exportBlockCsv(id: String, uri: Uri) = GeoEngine.exportBlockCsv(id, uri)

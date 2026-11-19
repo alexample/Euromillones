@@ -51,6 +51,9 @@ data class GeoState(
     // Bloques de 400.000
     val block: BlockProgress? = null,
     val blocks: List<BlockReport> = emptyList(),
+    // Bloque en tiempo real (lo que se va generando en automático o de uno en uno)
+    val liveN: Int = 0,
+    val liveReport: BlockReport? = null,
 )
 
 /** Progreso del bloque en curso. */
@@ -137,14 +140,18 @@ object GeoEngine {
             val g = Geo(app)
             geo = g
             load(g)
+            runCatching { liveRestore(g) }
             _state.update { it.copy(ready = true, nucleos = g.nucleos.size, blocks = BlockStore.list(app)) }
+            runCatching { liveRefreshReport() }
             estimate()
             // Cada segundo se guardan los números nuevos; cada 15 s los avisos
             var tick = 0
             while (isActive) {
                 delay(1_000)
                 runCatching { flush() }
-                if (++tick % 15 == 0 && dirty) save()
+                runCatching { liveFlush() }
+                if (++tick % 10 == 0) runCatching { liveRefreshReport() }
+                if (tick % 15 == 0 && dirty) save()
             }
         }
     }
@@ -215,6 +222,12 @@ object GeoEngine {
 
     fun clear() {
         synchronized(pending) { pending.clear() }
+        synchronized(liveLock) {
+            live?.writer?.runCatching { close() }
+            live = null
+            BlockStore.liveFile(app).delete()
+        }
+        _state.update { it.copy(liveN = 0, liveReport = null) }
         scope.launch { db.clear() }
         _state.update {
             it.copy(last = null, recent = emptyList(), hits = emptyList(), alerts = emptyList(), historySize = 0, total = 0, hitCount = 0)
@@ -225,6 +238,7 @@ object GeoEngine {
 
     private fun record(d: Draw) {
         queue(listOf(d))
+        geo?.let { g -> runCatching { liveAdd(g, d) } }
         _state.update { s ->
             s.copy(
                 last = d,
@@ -355,6 +369,211 @@ object GeoEngine {
         val count = db.searchCount(query, hitsOnly)
         val page = db.search(query, g.nucleos, hitsOnly, limit).map { it.first }
         return count to page
+    }
+
+    // ---------------- Bloque en tiempo real ----------------
+
+    private class LiveBlock(
+        val id: String,
+        val started: Long,
+        val mode: GenMode,
+        val pick: CityPick,
+        val cfg: RadiusConfig,
+        val counter: BlockCounter,
+        var writer: java.io.BufferedWriter,
+    )
+
+    private val liveLock = Any()
+    private var live: LiveBlock? = null
+    private var liveChanged = false
+    private var lastLiveAnomalies = 0
+
+    private fun newLive(g: Geo): LiveBlock {
+        val s = _state.value
+        val started = System.currentTimeMillis()
+        val id = "tiemporeal_" + java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(java.util.Date(started))
+        val f = BlockStore.liveFile(app)
+        val w = f.bufferedWriter(Charsets.UTF_8)
+        w.write(BlockStore.metaLine(s.mode, s.pick, s.radius) + ";id=$id;inicio=$started"); w.newLine()
+        w.write(BlockStore.header()); w.newLine()
+        lastLiveAnomalies = 0
+        return LiveBlock(id, started, s.mode, s.pick, s.radius, BlockCounter(g.nucleos), w)
+    }
+
+    /** Al abrir la app: continúa el bloque en tiempo real que quedó a medias. */
+    private fun liveRestore(g: Geo) {
+        val f = BlockStore.liveFile(app)
+        if (!f.exists()) return
+        var id: String? = null
+        var started = System.currentTimeMillis()
+        var mode = GenMode.CIUDADES
+        var pick = CityPick.POBLACION
+        var cfg = RadiusConfig()
+        val counter = BlockCounter(g.nucleos)
+        val byName = g.nucleos.withIndex().associate { (i, n) -> (n.key + "|" + n.regionKey) to i }
+        f.forEachLine { line ->
+            when {
+                line.startsWith("#") -> line.split(";").forEach { kv ->
+                    val (k, v) = kv.split("=", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+                    when (k) {
+                        "modo" -> runCatching { mode = GenMode.valueOf(v) }
+                        "eleccion" -> runCatching { pick = CityPick.valueOf(v) }
+                        "radios" -> cfg = RadiusConfig.decode(v)
+                        "id" -> id = v
+                        "inicio" -> v.toLongOrNull()?.let { started = it }
+                    }
+                }
+                line.startsWith("numero") -> {}
+                else -> {
+                    val p = line.split(";")
+                    if (p.size >= 10 && p[0].length == 5) {
+                        counter.add(p[0], byName[norm(p[3]) + "|" + norm(p[4])] ?: -1, p[9], null)
+                    }
+                }
+            }
+        }
+        val w = java.io.BufferedWriter(java.io.FileWriter(f, true))
+        synchronized(liveLock) {
+            live = LiveBlock(id ?: "tiemporeal_recuperado", started, mode, pick, cfg, counter, w)
+            liveChanged = true
+        }
+        _state.update { it.copy(liveN = counter.n) }
+    }
+
+    /** Añade un número al bloque en tiempo real; si cambió la configuración o se llegó a 400.000, se cierra. */
+    private fun liveAdd(g: Geo, d: Draw) {
+        val s = _state.value
+        var finished: LiveBlock? = null
+        val n: Int
+        synchronized(liveLock) {
+            var b = live
+            if (b != null && (b.mode != s.mode || b.pick != s.pick || b.cfg != s.radius)) {
+                finished = b
+                b = null
+            }
+            if (b == null) {
+                finished?.let { retire(it) }
+                b = newLive(g)
+                live = b
+            }
+            val seed = SolarEntropy.status.value.seed
+            val hex = seed?.hex ?: "azar-local"
+            b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime)
+            b.writer.write(
+                "${d.number};${r5(d.lat)};${r5(d.lon)};${d.nearest.name.replace(";", ",")};${d.nearest.region};" +
+                    "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex",
+            )
+            b.writer.newLine()
+            liveChanged = true
+            n = b.counter.n
+            if (n >= BLOCK_SIZE) {
+                finished = b
+                retire(b)
+                live = null
+            }
+        }
+        _state.update { it.copy(liveN = if (n >= BLOCK_SIZE) 0 else n) }
+        finished?.let { f -> scope.launch(Dispatchers.IO) { finalizeLive(f) } }
+    }
+
+    private fun closeWriter(b: LiveBlock) {
+        runCatching { b.writer.flush(); b.writer.close() }
+    }
+
+    private fun retiredFile(b: LiveBlock) = File(BlockStore.dir(app), b.id + ".csv")
+
+    /** Cierra el bloque y aparta su fichero (llamar con liveLock). */
+    private fun retire(b: LiveBlock) {
+        closeWriter(b)
+        BlockStore.liveFile(app).renameTo(retiredFile(b))
+    }
+
+    private fun liveFlush() = synchronized(liveLock) { live?.writer?.flush() }
+
+    /** Cierra el bloque en curso ahora mismo (aunque no haya llegado a 400.000). */
+    fun closeLiveNow() {
+        val b = synchronized(liveLock) {
+            val x = live ?: return
+            retire(x)
+            live = null
+            x
+        }
+        _state.update { it.copy(liveN = 0) }
+        scope.launch(Dispatchers.IO) { finalizeLive(b) }
+    }
+
+    /** Guarda el bloque terminado: comprime el CSV, calcula el informe y lo añade a la lista. */
+    @Synchronized
+    private fun finalizeLive(b: LiveBlock) {
+        val src = retiredFile(b)
+        if (b.counter.n == 0) {
+            src.delete()
+            return
+        }
+        val dst = BlockStore.dataFile(app, b.id)
+        runCatching {
+            if (src.exists()) {
+                src.inputStream().buffered(1 shl 16).use { input ->
+                    java.util.zip.GZIPOutputStream(dst.outputStream().buffered(1 shl 16)).use { out -> input.copyTo(out) }
+                }
+            }
+            val rep = synchronized(liveLock) {
+                b.counter.report(b.id, b.started, System.currentTimeMillis() - b.started, b.mode, b.pick, b.cfg, imported = false)
+            }
+            BlockStore.saveReport(app, rep)
+            src.delete()
+            _state.update {
+                it.copy(
+                    blocks = BlockStore.list(app),
+                    liveReport = null,
+                    message = "Bloque en tiempo real guardado: ${rep.n} números · ${rep.anomalies} anomalías.",
+                )
+            }
+        }.onFailure { e -> _state.update { it.copy(message = "Error al guardar el bloque en tiempo real: ${e.message}") } }
+    }
+
+    /** Recalcula el informe del bloque en curso y avisa si aparecen anomalías nuevas. */
+    private fun liveRefreshReport() {
+        val rep = synchronized(liveLock) {
+            val b = live ?: return
+            if (!liveChanged) return
+            liveChanged = false
+            b.counter.report(b.id, b.started, System.currentTimeMillis() - b.started, b.mode, b.pick, b.cfg, imported = false)
+        }
+        _state.update { it.copy(liveReport = rep, liveN = rep.n) }
+        if (rep.anomalies > lastLiveAnomalies) {
+            notifyAnomaly(rep, rep.anomalies - lastLiveAnomalies)
+        }
+        lastLiveAnomalies = rep.anomalies
+    }
+
+    private fun notifyAnomaly(r: BlockReport, nuevas: Int) {
+        val detail = buildList {
+            r.anomalousNumbers.firstOrNull()?.let { add("el ${it.label} ha salido ${it.count} veces (esperado ${"%.1f".format(Locale.forLanguageTag("es-ES"), it.expected)})") }
+            r.cityRows.firstOrNull { it.anomalous }?.let { add("${it.label}: ${it.count} veces (esperado ${Math.round(it.expected)})") }
+            r.digitRows.firstOrNull { it.anomalous }?.let { add("cifra ${it.detail} en ${it.label}") }
+            r.regionRows.firstOrNull { it.anomalous }?.let { add(it.label) }
+        }.joinToString(" · ").ifBlank { "reparto general fuera de lo normal" }
+        _state.update { it.copy(message = "⚠ Anomalía estadística en el bloque en curso: $detail") }
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(app, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        val pi = android.app.PendingIntent.getActivity(
+            app, 2,
+            android.content.Intent(app, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = androidx.core.app.NotificationCompat.Builder(app, ALERT_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("Anomalía estadística ($nuevas nueva${if (nuevas == 1) "" else "s"})")
+            .setContentText(detail)
+            .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(detail))
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        androidx.core.app.NotificationManagerCompat.from(app).notify(900, n)
     }
 
     // ---------------- Bloques de 400.000 ----------------
@@ -649,6 +868,7 @@ object GeoEngine {
     private fun save() {
         val g = geo ?: return
         runCatching { flush() }
+        runCatching { liveFlush() }
         dirty = false
         val s = _state.value
         val idx = g.index

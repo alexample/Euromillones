@@ -71,6 +71,8 @@ fun BlocksCard(
     onExcel: (String) -> Unit,
     onCsv: (String) -> Unit,
     onDelete: (String) -> Unit,
+    onOpenLive: () -> Unit,
+    onCloseLive: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF))) {
         Column(Modifier.padding(12.dp)) {
@@ -101,6 +103,39 @@ fun BlocksCard(
             }
             if (!expanded) return@Column
 
+            // ---- Bloque en tiempo real ----
+            Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                Column(Modifier.padding(10.dp)) {
+                    Text("Bloque en tiempo real", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Todo lo que generas en automático o de uno en uno se va acumulando aquí. " +
+                            "Al llegar a ${n0(BLOCK_SIZE)} se guarda con su informe y empieza otro.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    LinearProgressIndicator(
+                        progress = { s.liveN.toFloat() / BLOCK_SIZE },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    )
+                    Text("${n0(s.liveN)} de ${n0(BLOCK_SIZE)}", style = MaterialTheme.typography.bodySmall)
+                    s.liveReport?.let { r ->
+                        Text(
+                            if (r.anomalies == 0) "✓ Sin anomalías por ahora" else "⚠ ${r.anomalies} anomalía${if (r.anomalies == 1) "" else "s"} en curso",
+                            color = if (r.anomalies == 0) Ok else Red,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "${n0(r.distinct)} números distintos · el informe se actualiza cada 10 s",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    Row {
+                        TextButton(enabled = s.liveReport != null, onClick = onOpenLive) { Text("Informe en vivo") }
+                        TextButton(enabled = s.liveN > 0, onClick = onCloseLive) { Text("Cerrar bloque ahora") }
+                    }
+                }
+            }
+
             Text(
                 "Cada bloque genera ${n0(BLOCK_SIZE)} números seguidos (salen ≈98,2 % de los 100.000 posibles), " +
                     "se guarda en el móvil y se analiza: números, cifras, ciudades y comunidades frente a lo esperado por azar.",
@@ -119,7 +154,7 @@ fun BlocksCard(
                 Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     Column(Modifier.padding(10.dp)) {
                         Text(
-                            (if (r.imported) "Importado " else "") + date(r.created),
+                            (if (r.imported) "Importado " else if (r.id.startsWith("tiemporeal")) "Tiempo real · " else "") + date(r.created),
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
