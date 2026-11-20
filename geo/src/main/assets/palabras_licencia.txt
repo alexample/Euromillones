@@ -1,4 +1,4 @@
-Palabras extraídas del diccionario español de Hunspell (paquete dictionary-es, https://github.com/wooorm/dictionaries), con licencia (GPL-3.0 OR LGPL-3.0 OR MPL-1.1).
+Las 10000 palabras más frecuentes del español (lista de frecuencias de OpenSubtitles 2018, https://github.com/hermitdave/FrequencyWords, CC-BY-SA-4.0) que además aparecen en el diccionario español de Hunspell (paquete dictionary-es, https://github.com/wooorm/dictionaries, (GPL-3.0 OR LGPL-3.0 OR MPL-1.1)).
 
   ****************************************************************************
   **                                                                        **
