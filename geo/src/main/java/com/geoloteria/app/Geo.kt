@@ -43,6 +43,8 @@ data class Draw(
     val nearest: Nucleo,
     val distanceKm: Double,
     val radiusKm: Double,
+    val word: String = "",   // palabra del diccionario
+    val date: String = "",   // fecha 1940-2026 (aaaa-mm-dd)
 ) {
     val isHit: Boolean get() = radiusKm > 0 && distanceKm <= radiusKm
 }

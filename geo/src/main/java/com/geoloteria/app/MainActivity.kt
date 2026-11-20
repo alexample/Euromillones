@@ -251,6 +251,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                         )
                         Text("${coord(d.lat)}, ${coord(d.lon)}", fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall)
+                        WordDate(d, MaterialTheme.typography.bodyLarge)
                         Spacer(Modifier.height(8.dp))
                         Text(
                             "«Dónde lo venden» abre el buscador oficial de Loterías y Apuestas del Estado y busca este número automáticamente.",
@@ -354,6 +355,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                             }
+                            WordDate(d, MaterialTheme.typography.titleMedium)
                             Text("${coord(d.lat)}, ${coord(d.lon)}", fontFamily = FontFamily.Monospace,
                                 style = MaterialTheme.typography.bodyMedium)
                             Text(
@@ -591,6 +593,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                         Column(Modifier.weight(1f)) {
                             Text("${h.draw.nearest.name} · ${h.draw.nearest.region}", fontWeight = FontWeight.SemiBold,
                                 style = MaterialTheme.typography.bodyMedium)
+                            WordDate(h.draw, MaterialTheme.typography.bodySmall)
                             Text("${coord(h.draw.lat)}, ${coord(h.draw.lon)} · a ${km(h.draw.distanceKm)}",
                                 style = MaterialTheme.typography.bodySmall)
                         }
@@ -620,12 +623,14 @@ fun App(vm: GeoViewModel = viewModel()) {
                         textDecoration = TextDecoration.Underline,
                         modifier = Modifier.width(64.dp).clickable { selected = d },
                     )
-                    Text(
-                        "${coord(d.lat)}, ${coord(d.lon)}",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(Modifier.weight(1f)) {
+                        WordDate(d, MaterialTheme.typography.bodySmall)
+                        Text(
+                            "${coord(d.lat)}, ${coord(d.lon)}",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                     Text(
                         if (d.isHit) "✓ ${d.nearest.name}" else "${km(d.distanceKm)}",
                         color = if (d.isHit) HitGreen else Color.Unspecified,
@@ -768,6 +773,7 @@ private fun WatchCard(s: GeoState, vm: GeoViewModel, expanded: Boolean, onToggle
                         Column(Modifier.weight(1f)) {
                             Text(a.reason, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                             Text("${a.draw.nearest.name} · a ${km(a.draw.distanceKm)}", style = MaterialTheme.typography.labelSmall)
+                            WordDate(a.draw, MaterialTheme.typography.labelSmall)
                         }
                         Text(a.time.format(timeFmt), style = MaterialTheme.typography.labelSmall)
                     }
@@ -862,6 +868,19 @@ private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, on
 }
 
 private fun num2(x: Double) = String.format(es, "%.2f", x)
+
+/** «palabra» · dd/mm/aaaa del número (si lo tiene: los generados antes de esta versión no). */
+@Composable
+private fun WordDate(d: Draw, style: androidx.compose.ui.text.TextStyle) {
+    if (d.word.isEmpty() && d.date.isEmpty()) return
+    Text(
+        listOfNotNull(d.word.takeIf { it.isNotEmpty() }?.let { "«$it»" }, d.date.takeIf { it.isNotEmpty() }?.let { Words.show(it) })
+            .joinToString(" · "),
+        style = style,
+        fontWeight = FontWeight.SemiBold,
+        color = Teal,
+    )
+}
 
 @Composable
 private fun Stat(label: String, value: String) {

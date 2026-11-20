@@ -9,7 +9,7 @@ import android.database.sqlite.SQLiteOpenHelper
  * Base de datos SQLite con TODOS los números generados o importados (sin límite).
  * Índices por número, población y comunidad para que la búsqueda sea instantánea.
  */
-class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null, 1) {
+class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -24,7 +24,9 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
                 hit INTEGER NOT NULL,
                 ts INTEGER NOT NULL,
                 town_key TEXT NOT NULL,
-                region_key TEXT NOT NULL
+                region_key TEXT NOT NULL,
+                word TEXT NOT NULL DEFAULT '',
+                date TEXT NOT NULL DEFAULT ''
             )""",
         )
         db.execSQL("CREATE INDEX idx_number ON draws(number)")
@@ -32,7 +34,12 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         db.execSQL("CREATE INDEX idx_hit ON draws(hit, id)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE draws ADD COLUMN word TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE draws ADD COLUMN date TEXT NOT NULL DEFAULT ''")
+        }
+    }
 
     /** Guarda un lote de números en una sola transacción (rápido aunque sean miles). */
     fun insertAll(items: List<Pair<Draw, Long>>, index: Map<Nucleo, Int>) {
@@ -41,8 +48,8 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         db.beginTransaction()
         try {
             val st = db.compileStatement(
-                "INSERT OR REPLACE INTO draws (id, number, lat, lon, nuc, dist, radius, hit, ts, town_key, region_key) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO draws (id, number, lat, lon, nuc, dist, radius, hit, ts, town_key, region_key, word, date) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             )
             for ((d, ts) in items) {
                 st.clearBindings()
@@ -57,6 +64,8 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
                 st.bindLong(9, ts)
                 st.bindString(10, d.nearest.key)
                 st.bindString(11, d.nearest.regionKey)
+                st.bindString(12, d.word)
+                st.bindString(13, d.date)
                 st.executeInsert()
             }
             db.setTransactionSuccessful()
@@ -116,12 +125,13 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         val (w, a) = where(query, hitsOnly)
         val out = ArrayList<Pair<Draw, Long>>()
         readableDatabase.rawQuery(
-            "SELECT id, number, lat, lon, nuc, dist, radius, ts FROM draws$w ORDER BY id DESC LIMIT $limit OFFSET $offset",
+            "SELECT id, number, lat, lon, nuc, dist, radius, ts, word, date FROM draws$w ORDER BY id DESC LIMIT $limit OFFSET $offset",
             a,
         ).use { c ->
             while (c.moveToNext()) {
                 val n = nucleos.getOrNull(c.getInt(4)) ?: continue
-                out += Draw(c.getLong(0), c.getString(1), c.getDouble(2), c.getDouble(3), n, c.getDouble(5), c.getDouble(6)) to
+                out += Draw(c.getLong(0), c.getString(1), c.getDouble(2), c.getDouble(3), n, c.getDouble(5), c.getDouble(6),
+                    c.getString(8) ?: "", c.getString(9) ?: "") to
                     c.getLong(7)
             }
         }
@@ -132,11 +142,12 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
     fun forEach(nucleos: List<Nucleo>, hitsOnly: Boolean, max: Int, block: (Draw, Long) -> Unit) {
         val w = if (hitsOnly) " WHERE hit = 1" else ""
         readableDatabase.rawQuery(
-            "SELECT id, number, lat, lon, nuc, dist, radius, ts FROM draws$w ORDER BY id DESC LIMIT $max", null,
+            "SELECT id, number, lat, lon, nuc, dist, radius, ts, word, date FROM draws$w ORDER BY id DESC LIMIT $max", null,
         ).use { c ->
             while (c.moveToNext()) {
                 val n = nucleos.getOrNull(c.getInt(4)) ?: continue
-                block(Draw(c.getLong(0), c.getString(1), c.getDouble(2), c.getDouble(3), n, c.getDouble(5), c.getDouble(6)), c.getLong(7))
+                block(Draw(c.getLong(0), c.getString(1), c.getDouble(2), c.getDouble(3), n, c.getDouble(5), c.getDouble(6),
+                    c.getString(8) ?: "", c.getString(9) ?: ""), c.getLong(7))
             }
         }
     }

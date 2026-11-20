@@ -138,6 +138,7 @@ object GeoEngine {
         SolarEntropy.start()
         scope.launch {
             val g = Geo(app)
+            runCatching { Words.load(app) }
             geo = g
             load(g)
             runCatching { liveRestore(g) }
@@ -161,10 +162,12 @@ object GeoEngine {
     /** Un número nuevo según el modo elegido. */
     private fun next(g: Geo): Draw? {
         val s = _state.value
-        return when (s.mode) {
-            GenMode.CIUDADES -> g.drawInCity(nextId++, s.radius, s.pick, SolarEntropy.random())
-            GenMode.ESPANA -> g.draw(nextId++, s.radius, SolarEntropy.random())
+        val rnd = SolarEntropy.random()
+        val d = when (s.mode) {
+            GenMode.CIUDADES -> g.drawInCity(nextId++, s.radius, s.pick, rnd)
+            GenMode.ESPANA -> g.draw(nextId++, s.radius, rnd)
         }
+        return d?.let { Words.decorate(it, rnd) }
     }
 
     fun generateOne() {
@@ -461,7 +464,7 @@ object GeoEngine {
             b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime)
             b.writer.write(
                 "${d.number};${r5(d.lat)};${r5(d.lon)};${d.nearest.name.replace(";", ",")};${d.nearest.region};" +
-                    "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex",
+                    "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex;${d.word};${d.date}",
             )
             b.writer.newLine()
             liveChanged = true
@@ -608,10 +611,10 @@ object GeoEngine {
                         if (!isActive) throw kotlinx.coroutines.CancellationException()
                         val seed = SolarEntropy.status.value.seed
                         val rnd = SolarEntropy.random()
-                        val d = when (mode) {
+                        val d = (when (mode) {
                             GenMode.CIUDADES -> g.drawInCity(0, cfg, pick, rnd)
                             GenMode.ESPANA -> g.draw(0, cfg, rnd)
-                        } ?: error("No hay ciudades con radio mayor que 0")
+                        } ?: error("No hay ciudades con radio mayor que 0")).let { Words.decorate(it, rnd) }
                         val hex = seed?.hex ?: "azar-local"
                         val ni = g.index[d.nearest] ?: -1
                         counter.add(d.number, ni, hex, seed?.dataTime)
@@ -620,6 +623,7 @@ object GeoEngine {
                             .append(d.nearest.name.replace(";", ",")).append(';').append(d.nearest.region).append(';')
                             .append(d.nearest.population).append(';').append(r3(d.distanceKm)).append(';')
                             .append(r3(d.radiusKm)).append(';').append(if (d.isHit) "1" else "0").append(';').append(hex)
+                            .append(';').append(d.word).append(';').append(d.date)
                         w.write(sb.toString()); w.newLine()
                         if (i % 2000 == 0) _state.update { it.copy(block = it.block?.copy(done = i)) }
                     }
@@ -677,7 +681,8 @@ object GeoEngine {
                                 if (i == 0) emit(p)
                                 else emit(listOf<Any?>(p[0], p.getOrNull(1)?.toDoubleOrNull(), p.getOrNull(2)?.toDoubleOrNull(),
                                     p.getOrNull(3), p.getOrNull(4), p.getOrNull(5)?.toIntOrNull(), p.getOrNull(6)?.toDoubleOrNull(),
-                                    p.getOrNull(7)?.toDoubleOrNull(), p.getOrNull(8), p.getOrNull(9)))
+                                    p.getOrNull(7)?.toDoubleOrNull(), p.getOrNull(8), p.getOrNull(9),
+                                    p.getOrNull(10), p.getOrNull(11)?.let { Words.show(it) }))
                             }
                         }
                     }
@@ -881,7 +886,8 @@ object GeoEngine {
                 .append(idx[d.nearest] ?: 0).append(';').append(d.distanceKm).append(';').append(d.radiusKm)
                 .append(';').append(d.id)
                 .append(';').append(a.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
-                .append(';').append(a.reason.replace(";", ",").replace("\n", " ")).append('\n')
+                .append(';').append(a.reason.replace(";", ",").replace("\n", " "))
+                .append(';').append(d.word).append(';').append(d.date).append('\n')
         }
         val tmp = File(app.filesDir, "geoloteria.tmp")
         tmp.writeText(sb.toString())
@@ -902,7 +908,8 @@ object GeoEngine {
                     "H", "D", "A" -> {
                         if (p.size < 8) return@forEachLine
                         val n = g.nucleos.getOrNull(p[4].toIntOrNull() ?: -1) ?: return@forEachLine
-                        val d = Draw(p[7].toLong(), p[1], p[2].toDouble(), p[3].toDouble(), n, p[5].toDouble(), p[6].toDouble())
+                        val d = Draw(p[7].toLong(), p[1], p[2].toDouble(), p[3].toDouble(), n, p[5].toDouble(), p[6].toDouble(),
+                            p.getOrNull(10).orEmpty(), p.getOrNull(11).orEmpty())
                         val t = p.getOrNull(8)?.toLongOrNull()
                         when (p[0]) {
                             "A" -> alerts += Alert(d, p.getOrNull(9) ?: "Aviso", t?.let(::toTime) ?: LocalDateTime.now())
@@ -941,11 +948,11 @@ object GeoEngine {
         scope.launch(Dispatchers.IO) {
             runCatching { flush() }
             val s = _state.value
-            val header = listOf("Número", "Latitud", "Longitud", "En núcleo", "Ciudad", "Comunidad",
-                "Habitantes", "Distancia (km)", "Radio (km)", "Fecha y hora")
+            val header = listOf("Número", "Palabra", "Fecha (1940-2026)", "Latitud", "Longitud", "En núcleo", "Ciudad",
+                "Comunidad", "Habitantes", "Distancia (km)", "Radio (km)", "Generado el")
             fun row(d: Draw, ts: Long): List<Any?> = listOf(
-                d.number, d.lat, d.lon, if (d.isHit) "Sí" else "No", d.nearest.name, d.nearest.region,
-                d.nearest.population, round2(d.distanceKm), round2(d.radiusKm), toTime(ts).format(TIME),
+                d.number, d.word, Words.show(d.date), d.lat, d.lon, if (d.isHit) "Sí" else "No", d.nearest.name,
+                d.nearest.region, d.nearest.population, round2(d.distanceKm), round2(d.radiusKm), toTime(ts).format(TIME),
             )
             val max = Xlsx.MAX_ROWS - 1
             var nHits = 0

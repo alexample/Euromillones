@@ -25,7 +25,7 @@ import kotlin.math.sqrt
  */
 const val BLOCK_SIZE = 400_000
 private const val TOTAL_NUMBERS = 100_000
-private const val CSV_HEADER = "numero;latitud;longitud;ciudad;comunidad;habitantes;distancia_km;radio_km;en_nucleo;semilla"
+private const val CSV_HEADER = "numero;latitud;longitud;ciudad;comunidad;habitantes;distancia_km;radio_km;en_nucleo;semilla;palabra;fecha"
 
 /** Uso de cada hash solar dentro del bloque (para poder verificarlo). */
 data class SeedUse(val hex: String, val dataTime: String?, val count: Int)
