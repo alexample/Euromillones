@@ -1,0 +1,43 @@
+name: Datos diccionario
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  palabras:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar diccionario español (Hunspell, dictionary-es)
+        run: |
+          cd /tmp && npm pack dictionary-es@4 >/dev/null 2>&1 && tar xzf dictionary-es-*.tgz
+      - name: Extraer palabras
+        run: |
+          python3 - <<'P'
+          import re
+          raw = open('/tmp/package/index.dic', encoding='utf-8', errors='replace').read().splitlines()
+          words = set()
+          for l in raw[1:]:
+              x = l.split('/')[0].strip()
+              if re.fullmatch(r'[a-záéíóúüñ]{3,15}', x):
+                  words.add(x)
+          words = sorted(words)
+          open('geo/src/main/assets/palabras.txt', 'w', encoding='utf-8').write('\n'.join(words) + '\n')
+          lic = open('/tmp/package/license', encoding='utf-8').read()
+          open('geo/src/main/assets/palabras_licencia.txt', 'w', encoding='utf-8').write(
+              'Palabras extraídas del diccionario español de Hunspell (paquete dictionary-es, '
+              'https://github.com/wooorm/dictionaries), con licencia (GPL-3.0 OR LGPL-3.0 OR MPL-1.1).\n\n' + lic)
+          print(len(words), 'palabras')
+          P
+      - name: Guardar
+        run: |
+          git add geo/src/main/assets/palabras.txt geo/src/main/assets/palabras_licencia.txt
+          if git diff --cached --quiet; then echo "Sin cambios"; else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "GeoLotería: diccionario de palabras en español"
+            git push
+          fi
