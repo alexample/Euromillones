@@ -2,6 +2,10 @@ name: Datos diccionario
 
 on:
   workflow_dispatch:
+    inputs:
+      cuantas:
+        description: "Cuántas palabras comunes incluir"
+        default: "10000"
 
 permissions:
   contents: write
@@ -11,26 +15,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Descargar diccionario español (Hunspell, dictionary-es)
+      - name: Descargar diccionario (Hunspell) y lista de frecuencias (OpenSubtitles)
         run: |
           cd /tmp && npm pack dictionary-es@4 >/dev/null 2>&1 && tar xzf dictionary-es-*.tgz
-      - name: Extraer palabras
+          curl -sSL --retry 5 -o /tmp/es_50k.txt https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/es/es_50k.txt
+          head -5 /tmp/es_50k.txt
+      - name: Palabras comunes que existen en el diccionario
+        env:
+          CUANTAS: ${{ inputs.cuantas || '10000' }}
         run: |
           python3 - <<'P'
-          import re
-          raw = open('/tmp/package/index.dic', encoding='utf-8', errors='replace').read().splitlines()
-          words = set()
-          for l in raw[1:]:
+          import re, os
+          n = int(os.environ.get('CUANTAS', '10000'))
+          dic = set()
+          for l in open('/tmp/package/index.dic', encoding='utf-8', errors='replace').read().splitlines()[1:]:
               x = l.split('/')[0].strip()
-              if re.fullmatch(r'[a-záéíóúüñ]{3,15}', x):
-                  words.add(x)
-          words = sorted(words)
-          open('geo/src/main/assets/palabras.txt', 'w', encoding='utf-8').write('\n'.join(words) + '\n')
+              if re.fullmatch(r'[a-záéíóúüñ]{4,15}', x):
+                  dic.add(x)
+          out = []
+          for l in open('/tmp/es_50k.txt', encoding='utf-8'):
+              p = l.split()
+              if not p: continue
+              w = p[0].lower()
+              if w in dic and w not in out:
+                  out.append(w)
+              if len(out) >= n: break
+          open('geo/src/main/assets/palabras.txt', 'w', encoding='utf-8').write('\n'.join(out) + '\n')
           lic = open('/tmp/package/license', encoding='utf-8').read()
           open('geo/src/main/assets/palabras_licencia.txt', 'w', encoding='utf-8').write(
-              'Palabras extraídas del diccionario español de Hunspell (paquete dictionary-es, '
-              'https://github.com/wooorm/dictionaries), con licencia (GPL-3.0 OR LGPL-3.0 OR MPL-1.1).\n\n' + lic)
-          print(len(words), 'palabras')
+              f'Las {len(out)} palabras más frecuentes del español (lista de frecuencias de OpenSubtitles 2018, '
+              'https://github.com/hermitdave/FrequencyWords, CC-BY-SA-4.0) que además aparecen en el diccionario '
+              'español de Hunspell (paquete dictionary-es, https://github.com/wooorm/dictionaries, '
+              '(GPL-3.0 OR LGPL-3.0 OR MPL-1.1)).\n\n' + lic)
+          print(len(out), 'palabras; primeras:', out[:40]); print('últimas:', out[-20:])
           P
       - name: Guardar
         run: |
@@ -38,6 +55,6 @@ jobs:
           if git diff --cached --quiet; then echo "Sin cambios"; else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "GeoLotería: diccionario de palabras en español"
+            git commit -m "GeoLotería: diccionario de palabras comunes"
             git push
           fi
