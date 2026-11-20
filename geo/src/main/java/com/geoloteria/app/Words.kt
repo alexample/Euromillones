@@ -6,7 +6,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
 /**
- * Extras de cada número: una palabra del diccionario español (53.300 palabras, Hunspell)
+ * Extras de cada número: una de las 10.000 palabras más comunes del español (que existen en el diccionario)
  * y una fecha entre el 01/01/1940 y el 31/12/2026, ambas sacadas del mismo azar solar.
  */
 object Words {

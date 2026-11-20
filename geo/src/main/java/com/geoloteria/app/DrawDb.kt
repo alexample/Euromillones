@@ -181,13 +181,13 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         }
     }
 
-    /** Ranking: [column] = "nuc" (ciudad), "number" o "region_key"; devuelve (valor, veces) de más a menos. */
+    /** Ranking: devuelve (valor, veces) de más a menos; a igualdad de veces, el que salió más recientemente primero. */
     fun top(column: String, hitsOnly: Boolean, limit: Int): List<Pair<String, Long>> {
         require(column in RANK_COLUMNS)
         val w = rankWhere(column, hitsOnly)
         val out = ArrayList<Pair<String, Long>>()
         readableDatabase.rawQuery(
-            "SELECT $column, COUNT(*) AS c FROM draws$w GROUP BY $column ORDER BY c DESC, $column LIMIT $limit", null,
+            "SELECT $column, COUNT(*) AS c, MAX(id) AS last FROM draws$w GROUP BY $column ORDER BY c DESC, last DESC LIMIT $limit", null,
         ).use { c -> while (c.moveToNext()) out += c.getString(0) to c.getLong(1) }
         return out
     }
