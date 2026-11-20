@@ -1,0 +1,16 @@
+name: Diagnostico diccionario
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cd /tmp && npm pack an-array-of-spanish-words@latest >/dev/null 2>&1 && tar xzf an-array-of-spanish-words-*.tgz
+          ls -la package; cat package/package.json | head -30; cat package/license* 2>/dev/null | head -5
+          python3 - <<'P'
+          import json,re,random
+          w=json.load(open('/tmp/package/index.json'))
+          print('total',len(w))
+          ok=[x for x in w if re.fullmatch(r'[a-záéíóúüñ]{3,14}',x)]
+          print('filtradas',len(ok)); random.seed(1); print(random.sample(ok,40))
+          P
