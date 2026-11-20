@@ -59,7 +59,10 @@ data class GeoState(
 /** Progreso del bloque en curso. */
 data class BlockProgress(val done: Int, val total: Int, val startedAt: Long, val label: String = "Generando")
 
-enum class RankKind(val title: String) { CIUDADES("Ciudades"), NUMEROS("Números"), COMUNIDADES("Comunidades") }
+enum class RankKind(val title: String) {
+    CIUDADES("Ciudades"), NUMEROS("Números"), COMUNIDADES("Comunidades"),
+    PALABRAS("Palabras"), FECHAS("Fechas"), ANOS("Años"),
+}
 
 /** Una fila del ranking: nombre, detalle, veces y el texto con el que buscarla. */
 data class RankRow(val label: String, val detail: String, val count: Long, val key: String)
@@ -430,7 +433,8 @@ object GeoEngine {
                 else -> {
                     val p = line.split(";")
                     if (p.size >= 10 && p[0].length == 5) {
-                        counter.add(p[0], byName[norm(p[3]) + "|" + norm(p[4])] ?: -1, p[9], null)
+                        counter.add(p[0], byName[norm(p[3]) + "|" + norm(p[4])] ?: -1, p[9], null,
+                            p.getOrNull(10).orEmpty(), p.getOrNull(11).orEmpty())
                     }
                 }
             }
@@ -461,7 +465,7 @@ object GeoEngine {
             }
             val seed = SolarEntropy.status.value.seed
             val hex = seed?.hex ?: "azar-local"
-            b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime)
+            b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime, d.word, d.date)
             b.writer.write(
                 "${d.number};${r5(d.lat)};${r5(d.lon)};${d.nearest.name.replace(";", ",")};${d.nearest.region};" +
                     "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex;${d.word};${d.date}",
@@ -556,6 +560,11 @@ object GeoEngine {
             r.cityRows.firstOrNull { it.anomalous }?.let { add("${it.label}: ${it.count} veces (esperado ${Math.round(it.expected)})") }
             r.digitRows.firstOrNull { it.anomalous }?.let { add("cifra ${it.detail} en ${it.label}") }
             r.regionRows.firstOrNull { it.anomalous }?.let { add(it.label) }
+            r.anomalousWords.firstOrNull()?.let { add("la palabra «${it.label}» ${it.count} veces") }
+            r.anomalousDates.firstOrNull()?.let { add("la fecha ${it.label} ${it.count} veces") }
+            r.yearRows.firstOrNull { it.anomalous }?.let { add("el año ${it.label}") }
+            r.monthRows.firstOrNull { it.anomalous }?.let { add(it.label) }
+            r.weekdayRows.firstOrNull { it.anomalous }?.let { add("los ${it.label}") }
         }.joinToString(" · ").ifBlank { "reparto general fuera de lo normal" }
         _state.update { it.copy(message = "⚠ Anomalía estadística en el bloque en curso: $detail") }
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -617,7 +626,7 @@ object GeoEngine {
                         } ?: error("No hay ciudades con radio mayor que 0")).let { Words.decorate(it, rnd) }
                         val hex = seed?.hex ?: "azar-local"
                         val ni = g.index[d.nearest] ?: -1
-                        counter.add(d.number, ni, hex, seed?.dataTime)
+                        counter.add(d.number, ni, hex, seed?.dataTime, d.word, d.date)
                         sb.setLength(0)
                         sb.append(d.number).append(';').append(r5(d.lat)).append(';').append(r5(d.lon)).append(';')
                             .append(d.nearest.name.replace(";", ",")).append(';').append(d.nearest.region).append(';')
@@ -707,6 +716,8 @@ object GeoEngine {
             listOf<Any?>("Chi² uniformidad", round2(r.chi2)), listOf<Any?>("z del chi²", round2(r.chi2Z)),
             listOf<Any?>("Esperado por número", round2(r.expectedPerNumber)), listOf<Any?>("Máximo de veces", r.maxCount),
             listOf<Any?>("Umbral de anomalía (veces)", r.highThreshold), listOf<Any?>("Anomalías totales", r.anomalies),
+            listOf<Any?>("Palabras distintas", r.wordDistinct), listOf<Any?>("z chi² palabras", round2(r.wordChi2Z)),
+            listOf<Any?>("Fechas distintas", r.dateDistinct), listOf<Any?>("z chi² fechas", round2(r.dateChi2Z)),
         ) + listOf(listOf<Any?>("")) + listOf(listOf<Any?>("Hash solar", "Hora dato UTC", "Números")) +
             r.seeds.map { listOf<Any?>(it.hex, it.dataTime, it.count) }
         return listOf(
@@ -715,6 +726,11 @@ object GeoEngine {
             Xlsx.sheet("Cifras", rows(r.digitRows)),
             Xlsx.sheet("Ciudades", rows(r.cityRows)),
             Xlsx.sheet("Comunidades", rows(r.regionRows)),
+            Xlsx.sheet("Palabras", rows(r.anomalousWords + r.topWords.filter { t -> r.anomalousWords.none { it.label == t.label } })),
+            Xlsx.sheet("Fechas", rows(r.anomalousDates + r.topDates.filter { t -> r.anomalousDates.none { it.label == t.label } })),
+            Xlsx.sheet("Años", rows(r.yearRows)),
+            Xlsx.sheet("Meses", rows(r.monthRows)),
+            Xlsx.sheet("Dias semana", rows(r.weekdayRows)),
         )
     }
 
@@ -766,7 +782,8 @@ object GeoEngine {
                                 if ("numero" !in h) return@forEach
                                 header = h
                                 cols = intArrayOf(h.indexOf("numero"), h.indexOf("latitud"), h.indexOf("longitud"),
-                                    h.indexOf("ciudad"), h.indexOf("comunidad"), h.indexOf("semilla"))
+                                    h.indexOf("ciudad"), h.indexOf("comunidad"), h.indexOf("semilla"),
+                                    h.indexOf("palabra"), h.indexOf("fecha"))
                                 w.write(BlockStore.header()); w.newLine()
                                 return@forEach
                             }
@@ -779,9 +796,14 @@ object GeoEngine {
                             var ni = byName[norm(town) + "|" + norm(region)] ?: byTown[norm(town)]?.firstOrNull() ?: -1
                             if (ni < 0 && lat != null && lon != null) ni = g.index[g.evaluate(0, num, lat, lon, cfg).nearest] ?: -1
                             val hex = p.getOrNull(cols[5])?.ifBlank { null } ?: "importado"
-                            counter.add(num, ni, hex, null)
+                            val word = p.getOrNull(cols[6]).orEmpty().lowercase()
+                            val rawDate = p.getOrNull(cols[7]).orEmpty()
+                            // Acepta aaaa-mm-dd o dd/mm/aaaa
+                            val date = Regex("""(\d{1,2})/(\d{1,2})/(\d{4})""").matchEntire(rawDate)?.destructured
+                                ?.let { (dd, mm, yy) -> "%s-%02d-%02d".format(yy, mm.toInt(), dd.toInt()) } ?: rawDate
+                            counter.add(num, ni, hex, null, word, date)
                             val n = g.nucleos.getOrNull(ni)
-                            w.write("$num;${lat ?: ""};${lon ?: ""};${n?.name ?: town};${n?.region ?: region};${n?.population ?: ""};;;;$hex")
+                            w.write("$num;${lat ?: ""};${lon ?: ""};${n?.name ?: town};${n?.region ?: region};${n?.population ?: ""};;;;$hex;$word;$date")
                             w.newLine()
                             if (counter.n % 5000 == 0) _state.update { it.copy(block = it.block?.copy(done = counter.n)) }
                         }
@@ -815,12 +837,16 @@ object GeoEngine {
     fun ranking(kind: RankKind, hitsOnly: Boolean, limit: Int): Ranking {
         val g = geo ?: return Ranking(0, 0, emptyList())
         runCatching { flush() }
-        val total = db.count(hitsOnly)
         val col = when (kind) {
             RankKind.CIUDADES -> "nuc"
             RankKind.NUMEROS -> "number"
             RankKind.COMUNIDADES -> "region_key"
+            RankKind.PALABRAS -> "word"
+            RankKind.FECHAS -> "date"
+            RankKind.ANOS -> "substr(date,1,4)"
         }
+        // Palabras y fechas: solo cuentan los números que las tienen
+        val total = if (kind in setOf(RankKind.PALABRAS, RankKind.FECHAS, RankKind.ANOS)) db.countWith(col, hitsOnly) else db.count(hitsOnly)
         val regionName = g.nucleos.associate { it.regionKey to it.region }
         val rows = db.top(col, hitsOnly, limit).map { (v, c) ->
             when (kind) {
@@ -830,6 +856,16 @@ object GeoEngine {
                 }
                 RankKind.NUMEROS -> RankRow(v, "", c, v)
                 RankKind.COMUNIDADES -> RankRow(regionName[v] ?: v, "", c, v)
+                RankKind.PALABRAS -> RankRow(v, "", c, v)
+                RankKind.FECHAS -> {
+                    val d = runCatching { java.time.LocalDate.parse(v) }.getOrNull()
+                    RankRow(
+                        Words.show(v),
+                        d?.dayOfWeek?.getDisplayName(java.time.format.TextStyle.FULL, Locale.forLanguageTag("es-ES")).orEmpty(),
+                        c, Words.show(v),
+                    )
+                }
+                RankKind.ANOS -> RankRow(v, "", c, "año $v")
             }
         }
         return Ranking(total, db.distinct(col, hitsOnly), rows)

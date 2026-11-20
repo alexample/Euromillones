@@ -305,6 +305,68 @@ fun BlockReportScreen(r: BlockReport, modifier: Modifier = Modifier) {
         }
         items(r.cityRows, key = { "c-" + it.label + it.detail }) { x -> CityLine(x) }
 
+        // ---- Palabras ----
+        if (r.wordN > 0) {
+            item {
+                Section("Palabras del diccionario")
+                Info("Con palabra", n0(r.wordN))
+                Info("Palabras distintas", "${n0(r.wordDistinct)} de ${n0(r.wordTotal)}")
+                Info("Media por palabra", "${d2(r.wordLambda)} veces · anómala a partir de ${r.wordThreshold}")
+                Verdict("Reparto uniforme (chi²)", "z = ${d2(r.wordChi2Z)}", abs(r.wordChi2Z) <= 3.3)
+                if (r.anomalousWords.isEmpty()) {
+                    Text("✓ Ninguna palabra ha salido de forma anómala.", color = Ok, style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Las que más han salido", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp))
+                Row { H("Palabra", 150.dp); H("Veces", 60.dp); H("Esperado", 70.dp); H("z", 50.dp) }
+                (r.anomalousWords + r.topWords.filter { t -> r.anomalousWords.none { it.label == t.label } }).forEach { x ->
+                    Row { C(x.label, 150.dp, x.anomalous); C("${x.count}", 60.dp, x.anomalous); C(d1(x.expected), 70.dp, false); C(d1(x.z), 50.dp, x.anomalous) }
+                }
+            }
+        }
+
+        // ---- Fechas ----
+        if (r.dateN > 0) {
+            item {
+                Section("Fechas (1940-2026)")
+                Info("Con fecha", n0(r.dateN))
+                Info("Fechas distintas", "${n0(r.dateDistinct)} de ${n0(r.dateTotal)}")
+                Info("Media por fecha", "${d2(r.dateLambda)} veces · anómala a partir de ${r.dateThreshold}")
+                Verdict("Reparto uniforme (chi²)", "z = ${d2(r.dateChi2Z)}", abs(r.dateChi2Z) <= 3.3)
+                if (r.anomalousDates.isEmpty()) {
+                    Text("✓ Ninguna fecha ha salido de forma anómala.", color = Ok, style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Las que más han salido", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp))
+                Row { H("Fecha", 90.dp); H("Día", 80.dp); H("Veces", 50.dp); H("Esp.", 50.dp); H("z", 50.dp) }
+                (r.anomalousDates + r.topDates.filter { t -> r.anomalousDates.none { it.label == t.label } }).forEach { x ->
+                    Row { C(x.label, 90.dp, x.anomalous, mono = true); C(x.detail, 80.dp, false); C("${x.count}", 50.dp, x.anomalous); C(d1(x.expected), 50.dp, false); C(d1(x.z), 50.dp, x.anomalous) }
+                }
+            }
+            item {
+                Section("Días de la semana")
+                Text("Anómalo si |z| > ${d2(r.weekdayCrit)}.", style = MaterialTheme.typography.bodySmall)
+            }
+            items(r.weekdayRows, key = { "wd-" + it.label }) { x -> CityLine(x) }
+            item {
+                Section("Meses")
+                Text("Lo esperado tiene en cuenta los días de cada mes. Anómalo si |z| > ${d2(r.monthCrit)}.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            items(r.monthRows, key = { "m-" + it.label }) { x -> CityLine(x) }
+            item {
+                Section("Años")
+                val bad = r.yearRows.count { it.anomalous }
+                Text(
+                    "Anómalo si |z| > ${d2(r.yearCrit)} (87 años). " +
+                        if (bad == 0) "✓ Ningún año fuera de lo normal. Se muestran los más desviados." else "⚠ $bad año(s) fuera de lo normal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (bad == 0) Color.Unspecified else Red,
+                )
+            }
+            items(r.yearRows.sortedByDescending { abs(it.z) }.take(15), key = { "y-" + it.label }) { x -> CityLine(x) }
+        }
+
         // ---- Comunidades ----
         item {
             Section("Comunidades autónomas")

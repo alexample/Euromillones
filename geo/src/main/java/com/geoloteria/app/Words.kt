@@ -11,8 +11,22 @@ import kotlin.random.Random
  */
 object Words {
     private var words: Array<String> = emptyArray()
-    private val FIRST_DAY = LocalDate.of(1940, 1, 1).toEpochDay()
-    private val LAST_DAY = LocalDate.of(2026, 12, 31).toEpochDay()
+    val FIRST_DAY = LocalDate.of(1940, 1, 1).toEpochDay()
+    val LAST_DAY = LocalDate.of(2026, 12, 31).toEpochDay()
+    val DAYS: Int get() = (LAST_DAY - FIRST_DAY + 1).toInt()
+    private var indexOf: Map<String, Int> = emptyMap()
+
+    /** Posición de una palabra en el diccionario (-1 si no está). */
+    fun index(w: String): Int = indexOf[w] ?: -1
+    fun at(i: Int): String = words.getOrElse(i) { "" }
+
+    /** Día (0 = 01/01/1940) de una fecha aaaa-mm-dd; -1 si no es válida o está fuera de rango. */
+    fun dayIndex(iso: String): Int = runCatching {
+        val d = LocalDate.parse(iso).toEpochDay()
+        if (d in FIRST_DAY..LAST_DAY) (d - FIRST_DAY).toInt() else -1
+    }.getOrDefault(-1)
+
+    fun dayAt(i: Int): LocalDate = LocalDate.ofEpochDay(FIRST_DAY + i)
     private val SHOW = DateTimeFormatter.ofPattern("dd/MM/yyyy")
 
     val size: Int get() = words.size
@@ -23,6 +37,7 @@ object Words {
         words = ctx.assets.open("palabras.txt").bufferedReader(Charsets.UTF_8).useLines { l ->
             l.map { it.trim() }.filter { it.isNotEmpty() }.toList().toTypedArray()
         }
+        indexOf = HashMap<String, Int>(words.size * 2).also { m -> words.forEachIndexed { i, w -> m[w] = i } }
     }
 
     fun word(rnd: Random): String = if (words.isEmpty()) "" else words[rnd.nextInt(words.size)]

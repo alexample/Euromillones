@@ -9,6 +9,9 @@ import android.database.sqlite.SQLiteOpenHelper
  * Base de datos SQLite con TODOS los números generados o importados (sin límite).
  * Índices por número, población y comunidad para que la búsqueda sea instantánea.
  */
+/** Columnas (o expresiones) por las que se puede hacer ranking. */
+val RANK_COLUMNS = setOf("nuc", "number", "region_key", "word", "date", "substr(date,1,4)")
+
 class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -92,19 +95,45 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         val parts = ArrayList<String>()
         val args = ArrayList<String>()
         if (hitsOnly) parts += "hit = 1"
+        val dmy = Regex("""(\d{1,2})/(\d{1,2})/(\d{4})""").matchEntire(q)
+        val year = Regex("""a[nñ]o\s*(\d{4})""").matchEntire(norm(q).replace("ano", "año"))
+            ?: Regex("""a[nñ]o\s*(\d{4})""").matchEntire(q.lowercase())
         if (q.isNotEmpty()) {
-            if (q.all { it.isDigit() }) {
+            if (dmy != null) {
+                val (dd, mm, yy) = dmy.destructured
+                parts += "date = ?"
+                args += "%s-%02d-%02d".format(yy, mm.toInt(), dd.toInt())
+            } else if (year != null) {
+                parts += "date LIKE ?"
+                args += "${year.groupValues[1]}-%"
+            } else if (q.all { it.isDigit() }) {
                 parts += "number LIKE ?"
                 args += "%$q%"
             } else {
                 val k = norm(q)
-                parts += "(town_key LIKE ? OR region_key LIKE ?)"
+                parts += "(town_key LIKE ? OR region_key LIKE ? OR word LIKE ?)"
                 args += "%$k%"
                 args += "%$k%"
+                args += "%${q.lowercase()}%"
             }
         }
         val w = if (parts.isEmpty()) "" else " WHERE " + parts.joinToString(" AND ")
         return w to args.toTypedArray()
+    }
+
+    /** Cuántos números tienen palabra/fecha (los anteriores a esa versión no). */
+    fun countWith(column: String, hitsOnly: Boolean): Long {
+        require(column in RANK_COLUMNS)
+        return readableDatabase.rawQuery("SELECT COUNT(*) FROM draws" + rankWhere(column, hitsOnly), null)
+            .use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }
+    }
+
+    private fun rankWhere(column: String, hitsOnly: Boolean): String {
+        val parts = ArrayList<String>()
+        if (hitsOnly) parts += "hit = 1"
+        if (column == "word") parts += "word <> ''"
+        if (column.contains("date")) parts += "date <> ''"
+        return if (parts.isEmpty()) "" else " WHERE " + parts.joinToString(" AND ")
     }
 
     /** Cuántos coinciden con la búsqueda (en TODO lo guardado). */
@@ -154,8 +183,8 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
 
     /** Ranking: [column] = "nuc" (ciudad), "number" o "region_key"; devuelve (valor, veces) de más a menos. */
     fun top(column: String, hitsOnly: Boolean, limit: Int): List<Pair<String, Long>> {
-        require(column in setOf("nuc", "number", "region_key"))
-        val w = if (hitsOnly) " WHERE hit = 1" else ""
+        require(column in RANK_COLUMNS)
+        val w = rankWhere(column, hitsOnly)
         val out = ArrayList<Pair<String, Long>>()
         readableDatabase.rawQuery(
             "SELECT $column, COUNT(*) AS c FROM draws$w GROUP BY $column ORDER BY c DESC, $column LIMIT $limit", null,
@@ -165,8 +194,8 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
 
     /** Cuántos valores distintos hay (ciudades, números o comunidades que han salido al menos una vez). */
     fun distinct(column: String, hitsOnly: Boolean): Long {
-        require(column in setOf("nuc", "number", "region_key"))
-        val w = if (hitsOnly) " WHERE hit = 1" else ""
+        require(column in RANK_COLUMNS)
+        val w = rankWhere(column, hitsOnly)
         return readableDatabase.rawQuery("SELECT COUNT(DISTINCT $column) FROM draws$w", null)
             .use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }
     }

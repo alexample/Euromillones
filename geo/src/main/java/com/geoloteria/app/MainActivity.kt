@@ -555,13 +555,17 @@ fun App(vm: GeoViewModel = viewModel()) {
                             IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Clear, contentDescription = "Borrar búsqueda") }
                         }
                     },
-                    label = { Text("Buscar por número o ciudad") },
-                    placeholder = { Text("Ej.: 48213, 482, Toledo, Galicia…") },
+                    label = { Text("Buscar número, ciudad, palabra o fecha") },
+                    placeholder = { Text("48213, Toledo, zambomba, 14/03/1967, año 1967…") },
                 )
                 if (query.isNotBlank()) {
                     Text(
-                        if (query.trim().all { it.isDigit() }) "Números que contienen «${query.trim()}»"
-                        else "Ciudad o comunidad que contiene «${query.trim()}»",
+                        when {
+                            Regex("""\d{1,2}/\d{1,2}/\d{4}""").matches(query.trim()) -> "Números con la fecha ${query.trim()}"
+                            Regex("""a[nñ]o\s*\d{4}""").matches(query.trim().lowercase()) -> "Números con fecha del ${query.trim().lowercase()}"
+                            query.trim().all { it.isDigit() } -> "Números que contienen «${query.trim()}»"
+                            else -> "Ciudad, comunidad o palabra que contiene «${query.trim()}»"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -805,9 +809,11 @@ private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, on
                 Text(if (expanded) "▲" else "▼")
             }
             if (!expanded) return@Column
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                RankKind.entries.forEach { k ->
-                    FilterChip(selected = k == kind, onClick = { kind = k; limit = 20 }, label = { Text(k.title) })
+            RankKind.entries.chunked(3).forEach { rowKinds ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    rowKinds.forEach { k ->
+                        FilterChip(selected = k == kind, onClick = { kind = k; limit = 20 }, label = { Text(k.title) })
+                    }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -827,10 +833,19 @@ private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, on
                 RankKind.CIUDADES -> "ciudades distintas"
                 RankKind.NUMEROS -> "números distintos (de 100.000)"
                 RankKind.COMUNIDADES -> "comunidades"
+                RankKind.PALABRAS -> "palabras distintas (de ${thousands(Words.size.toLong())})"
+                RankKind.FECHAS -> "fechas distintas (de ${thousands(Words.DAYS.toLong())})"
+                RankKind.ANOS -> "años (de 87)"
             }
             Text(
                 "${thousands(r.total)} ${if (hitsOnly) "aciertos" else "números"} · ${thousands(r.distinct)} $what." +
-                    if (kind == RankKind.NUMEROS) " Por azar, cada número debería salir unas ${num2(r.total / 100_000.0)} veces." else "",
+                    when (kind) {
+                        RankKind.NUMEROS -> " Por azar, cada número debería salir unas ${num2(r.total / 100_000.0)} veces."
+                        RankKind.PALABRAS -> " Por azar, cada palabra debería salir unas ${num2(r.total / Words.size.coerceAtLeast(1).toDouble())} veces."
+                        RankKind.FECHAS -> " Por azar, cada fecha debería salir unas ${num2(r.total / Words.DAYS.toDouble())} veces."
+                        RankKind.ANOS -> " Por azar, cada año debería salir unas ${num2(r.total * 365.25 / Words.DAYS)} veces."
+                        else -> ""
+                    } + if (kind in setOf(RankKind.PALABRAS, RankKind.FECHAS, RankKind.ANOS)) " (Solo cuentan los números generados desde la versión 2.4.)" else "",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 4.dp),
             )
@@ -845,7 +860,7 @@ private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, on
                         Text(
                             row.label,
                             fontWeight = FontWeight.SemiBold,
-                            fontFamily = if (kind == RankKind.NUMEROS) FontFamily.Monospace else FontFamily.Default,
+                            fontFamily = if (kind == RankKind.NUMEROS || kind == RankKind.FECHAS) FontFamily.Monospace else FontFamily.Default,
                         )
                         if (row.detail.isNotEmpty()) Text(row.detail, style = MaterialTheme.typography.labelSmall)
                     }

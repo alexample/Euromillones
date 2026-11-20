@@ -64,10 +64,36 @@ data class BlockReport(
     val cityTests: Int,
     val regionRows: List<StatRow>,
     val regionCrit: Double,
+    // Palabras y fechas (vacío en bloques anteriores a esta versión)
+    val wordN: Int = 0,
+    val wordDistinct: Int = 0,
+    val wordTotal: Int = 0,
+    val wordLambda: Double = 0.0,
+    val wordThreshold: Int = 0,
+    val wordChi2Z: Double = 0.0,
+    val anomalousWords: List<StatRow> = emptyList(),
+    val topWords: List<StatRow> = emptyList(),
+    val dateN: Int = 0,
+    val dateDistinct: Int = 0,
+    val dateTotal: Int = 0,
+    val dateLambda: Double = 0.0,
+    val dateThreshold: Int = 0,
+    val dateChi2Z: Double = 0.0,
+    val anomalousDates: List<StatRow> = emptyList(),
+    val topDates: List<StatRow> = emptyList(),
+    val yearRows: List<StatRow> = emptyList(),
+    val yearCrit: Double = 0.0,
+    val monthRows: List<StatRow> = emptyList(),
+    val monthCrit: Double = 0.0,
+    val weekdayRows: List<StatRow> = emptyList(),
+    val weekdayCrit: Double = 0.0,
 ) {
     val anomalies: Int
         get() = anomalousNumbers.size + digitRows.count { it.anomalous } + cityRows.count { it.anomalous } +
-            regionRows.count { it.anomalous } + (if (abs(chi2Z) > 3.3) 1 else 0) + (if (abs(zerosZ) > 3.3) 1 else 0)
+            regionRows.count { it.anomalous } + (if (abs(chi2Z) > 3.3) 1 else 0) + (if (abs(zerosZ) > 3.3) 1 else 0) +
+            anomalousWords.size + anomalousDates.size + yearRows.count { it.anomalous } + monthRows.count { it.anomalous } +
+            weekdayRows.count { it.anomalous } + (if (wordN > 0 && abs(wordChi2Z) > 3.3) 1 else 0) +
+            (if (dateN > 0 && abs(dateChi2Z) > 3.3) 1 else 0)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -129,8 +155,20 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
     val cities = IntArray(nucleos.size)
     var n = 0
     val seeds = LinkedHashMap<String, Pair<String?, Int>>()
+    val words = IntArray(Words.size.coerceAtLeast(1))
+    val days = IntArray(Words.DAYS)
+    var wordN = 0
+    var dateN = 0
 
-    fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?) {
+    fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?, word: String = "", date: String = "") {
+        if (word.isNotEmpty()) {
+            val wi = Words.index(word)
+            if (wi in words.indices) { words[wi]++; wordN++ }
+        }
+        if (date.isNotEmpty()) {
+            val di = Words.dayIndex(date)
+            if (di in days.indices) { days[di]++; dateN++ }
+        }
         val v = number.toInt()
         numbers[v]++
         for (p in 0 until 5) digits[p][number[p] - '0']++
@@ -232,7 +270,71 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
             }
         }.sortedByDescending { if (probs == null) it.count.toDouble() else abs(it.z) }
 
+        // ---- Palabras ----
+        val wTotal = words.size
+        val wLam = wordN.toDouble() / wTotal
+        var wChi = 0.0
+        if (wordN > 0) for (c in words) wChi += (c - wLam) * (c - wLam) / wLam
+        val wChiZ = if (wordN > 0) (wChi - (wTotal - 1)) / sqrt(2.0 * (wTotal - 1)) else 0.0
+        var wk = 1
+        if (wordN > 0) while (wTotal * Stats.poissonTail(wLam, wk) >= 0.05 && wk < 100_000) wk++
+        val wSd = sqrt(wLam).coerceAtLeast(1e-9)
+        val wOrder = if (wordN > 0) words.indices.sortedByDescending { words[it] } else emptyList()
+        fun wRow(i: Int) = StatRow(Words.at(i), "", words[i], wLam, (words[i] - wLam) / wSd, words[i] >= wk)
+        val anomalousWords = wOrder.takeWhile { words[it] >= wk }.map(::wRow)
+        val topWords = wOrder.take(20).map(::wRow)
+
+        // ---- Fechas ----
+        val dTotal = days.size
+        val dLam = dateN.toDouble() / dTotal
+        var dChi = 0.0
+        if (dateN > 0) for (c in days) dChi += (c - dLam) * (c - dLam) / dLam
+        val dChiZ = if (dateN > 0) (dChi - (dTotal - 1)) / sqrt(2.0 * (dTotal - 1)) else 0.0
+        var dk = 1
+        if (dateN > 0) while (dTotal * Stats.poissonTail(dLam, dk) >= 0.05 && dk < 100_000) dk++
+        val dSd = sqrt(dLam).coerceAtLeast(1e-9)
+        val dFmt = java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")
+        val dOrder = if (dateN > 0) days.indices.sortedByDescending { days[it] } else emptyList()
+        fun dRow(i: Int) = StatRow(Words.dayAt(i).format(dFmt), Words.dayAt(i).dayOfWeek.getDisplayName(
+            java.time.format.TextStyle.FULL, java.util.Locale.forLanguageTag("es-ES")), days[i], dLam, (days[i] - dLam) / dSd, days[i] >= dk)
+        val anomalousDates = dOrder.takeWhile { days[it] >= dk }.map(::dRow)
+        val topDates = dOrder.take(20).map(::dRow)
+
+        // Años, meses y días de la semana: lo esperado es proporcional a los días que tiene cada uno
+        fun grouped(key: (java.time.LocalDate) -> String, label: (String) -> String): Pair<List<StatRow>, Double> {
+            if (dateN == 0) return emptyList<StatRow>() to 0.0
+            val cnt = LinkedHashMap<String, Int>()
+            val dayCount = LinkedHashMap<String, Int>()
+            for (i in days.indices) {
+                val k = key(Words.dayAt(i))
+                cnt[k] = (cnt[k] ?: 0) + days[i]
+                dayCount[k] = (dayCount[k] ?: 0) + 1
+            }
+            val crit = Stats.zCrit(cnt.size)
+            return cnt.map { (k, c) ->
+                val p = dayCount.getValue(k).toDouble() / dTotal
+                val e = dateN * p
+                val z = (c - e) / sqrt(dateN * p * (1 - p)).coerceAtLeast(1e-9)
+                StatRow(label(k), "", c, e, z, abs(z) > crit)
+            } to crit
+        }
+        val es = java.util.Locale.forLanguageTag("es-ES")
+        val (yearRows, yearCrit) = grouped({ it.year.toString() }, { it })
+        val (monthRows, monthCrit) = grouped({ "%02d".format(it.monthValue) }, { m ->
+            java.time.Month.of(m.toInt()).getDisplayName(java.time.format.TextStyle.FULL, es)
+        })
+        val (weekdayRows, weekdayCrit) = grouped({ it.dayOfWeek.value.toString() }, { d ->
+            java.time.DayOfWeek.of(d.toInt()).getDisplayName(java.time.format.TextStyle.FULL, es)
+        })
+
         return BlockReport(
+            wordN = wordN, wordDistinct = words.count { it > 0 }, wordTotal = wTotal, wordLambda = wLam,
+            wordThreshold = wk, wordChi2Z = wChiZ, anomalousWords = anomalousWords, topWords = topWords,
+            dateN = dateN, dateDistinct = days.count { it > 0 }, dateTotal = dTotal, dateLambda = dLam,
+            dateThreshold = dk, dateChi2Z = dChiZ, anomalousDates = anomalousDates, topDates = topDates,
+            yearRows = yearRows, yearCrit = yearCrit, monthRows = monthRows, monthCrit = monthCrit,
+            weekdayRows = weekdayRows.sortedBy { r -> listOf("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo").indexOf(r.label) },
+            weekdayCrit = weekdayCrit,
             id = id, created = created, n = n,
             mode = mode?.name ?: "DESCONOCIDO", pick = pick?.name ?: "", radius = cfg.encode(),
             durationMs = durationMs, imported = imported,
@@ -324,6 +426,15 @@ object BlockStore {
         .put("digits", rowsToJson(r.digitRows)).put("digitCrit", r.digitCrit)
         .put("cities", rowsToJson(r.cityRows)).put("cityCrit", r.cityCrit).put("cityTests", r.cityTests)
         .put("regions", rowsToJson(r.regionRows)).put("regionCrit", r.regionCrit)
+        .put("wordN", r.wordN).put("wordDistinct", r.wordDistinct).put("wordTotal", r.wordTotal).put("wordLambda", r.wordLambda)
+        .put("wordK", r.wordThreshold).put("wordChi2Z", r.wordChi2Z)
+        .put("anomalousWords", rowsToJson(r.anomalousWords)).put("topWords", rowsToJson(r.topWords))
+        .put("dateN", r.dateN).put("dateDistinct", r.dateDistinct).put("dateTotal", r.dateTotal).put("dateLambda", r.dateLambda)
+        .put("dateK", r.dateThreshold).put("dateChi2Z", r.dateChi2Z)
+        .put("anomalousDates", rowsToJson(r.anomalousDates)).put("topDates", rowsToJson(r.topDates))
+        .put("years", rowsToJson(r.yearRows)).put("yearCrit", r.yearCrit)
+        .put("months", rowsToJson(r.monthRows)).put("monthCrit", r.monthCrit)
+        .put("weekdays", rowsToJson(r.weekdayRows)).put("weekdayCrit", r.weekdayCrit)
 
     fun fromJson(o: JSONObject): BlockReport {
         val seeds = o.optJSONArray("seeds")
@@ -346,6 +457,15 @@ object BlockStore {
             cityRows = rowsFromJson(o.optJSONArray("cities")), cityCrit = o.optDouble("cityCrit"),
             cityTests = o.optInt("cityTests"),
             regionRows = rowsFromJson(o.optJSONArray("regions")), regionCrit = o.optDouble("regionCrit"),
+            wordN = o.optInt("wordN"), wordDistinct = o.optInt("wordDistinct"), wordTotal = o.optInt("wordTotal"),
+            wordLambda = o.optDouble("wordLambda", 0.0), wordThreshold = o.optInt("wordK"), wordChi2Z = o.optDouble("wordChi2Z", 0.0),
+            anomalousWords = rowsFromJson(o.optJSONArray("anomalousWords")), topWords = rowsFromJson(o.optJSONArray("topWords")),
+            dateN = o.optInt("dateN"), dateDistinct = o.optInt("dateDistinct"), dateTotal = o.optInt("dateTotal"),
+            dateLambda = o.optDouble("dateLambda", 0.0), dateThreshold = o.optInt("dateK"), dateChi2Z = o.optDouble("dateChi2Z", 0.0),
+            anomalousDates = rowsFromJson(o.optJSONArray("anomalousDates")), topDates = rowsFromJson(o.optJSONArray("topDates")),
+            yearRows = rowsFromJson(o.optJSONArray("years")), yearCrit = o.optDouble("yearCrit", 0.0),
+            monthRows = rowsFromJson(o.optJSONArray("months")), monthCrit = o.optDouble("monthCrit", 0.0),
+            weekdayRows = rowsFromJson(o.optJSONArray("weekdays")), weekdayCrit = o.optDouble("weekdayCrit", 0.0),
         )
     }
 }
