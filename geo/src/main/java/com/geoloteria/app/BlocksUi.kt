@@ -366,6 +366,19 @@ fun BlockReportScreen(r: BlockReport, modifier: Modifier = Modifier) {
             items(r.yearRows, key = { "y-" + it.label }) { x -> CityLine(x) }
         }
 
+        // ---- Euromillones ----
+        if (r.euroN > 0) {
+            item {
+                Section("Combinaciones de Euromillones")
+                Text(
+                    "Cada número lleva una combinación cruzada con ${n0(r.euroDraws)} sorteos reales. " +
+                        "Lo esperado es la probabilidad de llegar a esos aciertos en algún sorteo. Anómalo si |z| > ${d2(r.euroCrit)}.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            items(r.euroRows, key = { "eu-" + it.label }) { x -> CityLine(x) }
+        }
+
         // ---- Comunidades ----
         item {
             Section("Comunidades autónomas")

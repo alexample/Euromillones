@@ -46,6 +46,9 @@ data class Draw(
     val word: String = "",   // palabra del diccionario
     val date: String = "",   // fecha del evento histórico (aaaa-mm-dd)
     val event: Int = -1,     // evento histórico (posición en eventos.tsv)
+    val euro: String = "",   // combinación de Euromillones "05 12 23 34 49 + 03 09"
+    val euroHits: Int = -1,  // máximo de aciertos (números + estrellas) en el histórico
+    val euroInfo: String = "", // solo si hay más de cuatro aciertos: cuántos y en qué sorteo(s)
 ) {
     val isHit: Boolean get() = radiusKm > 0 && distanceKm <= radiusKm
 }

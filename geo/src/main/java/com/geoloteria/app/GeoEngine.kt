@@ -143,6 +143,7 @@ object GeoEngine {
             val g = Geo(app)
             runCatching { Words.load(app) }
             runCatching { Events.load(app) }
+            runCatching { EuroHistory.start(app) }
             geo = g
             load(g)
             runCatching { liveRestore(g) }
@@ -435,7 +436,7 @@ object GeoEngine {
                     val p = line.split(";")
                     if (p.size >= 10 && p[0].length == 5) {
                         counter.add(p[0], byName[norm(p[3]) + "|" + norm(p[4])] ?: -1, p[9], null,
-                            p.getOrNull(10).orEmpty(), p.getOrNull(12)?.toIntOrNull() ?: -1)
+                            p.getOrNull(10).orEmpty(), p.getOrNull(12)?.toIntOrNull() ?: -1, p.getOrNull(14)?.toIntOrNull() ?: -1)
                     }
                 }
             }
@@ -466,10 +467,10 @@ object GeoEngine {
             }
             val seed = SolarEntropy.status.value.seed
             val hex = seed?.hex ?: "azar-local"
-            b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime, d.word, d.event)
+            b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime, d.word, d.event, d.euroHits)
             b.writer.write(
                 "${d.number};${r5(d.lat)};${r5(d.lon)};${d.nearest.name.replace(";", ",")};${d.nearest.region};" +
-                    "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex;${d.word};${d.date};${d.event}",
+                    "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex;${d.word};${d.date};${d.event};${d.euro};${d.euroHits};${d.euroInfo.replace(";", ",")}",
             )
             b.writer.newLine()
             liveChanged = true
@@ -564,6 +565,7 @@ object GeoEngine {
             r.anomalousWords.firstOrNull()?.let { add("la palabra «${it.label}» ${it.count} veces") }
             r.anomalousDates.firstOrNull()?.let { add("el evento «${it.label.take(60)}» ${it.count} veces") }
             r.yearRows.firstOrNull { it.anomalous }?.let { add(it.label) }
+            r.euroRows.firstOrNull { it.anomalous }?.let { add("Euromillones: ${it.label} ${it.count} veces (esperado ${Math.round(it.expected)})") }
             r.monthRows.firstOrNull { it.anomalous }?.let { add(it.label) }
             r.weekdayRows.firstOrNull { it.anomalous }?.let { add("los ${it.label}") }
         }.joinToString(" · ").ifBlank { "reparto general fuera de lo normal" }
@@ -627,13 +629,14 @@ object GeoEngine {
                         } ?: error("No hay ciudades con radio mayor que 0")).let { Words.decorate(it, rnd) }
                         val hex = seed?.hex ?: "azar-local"
                         val ni = g.index[d.nearest] ?: -1
-                        counter.add(d.number, ni, hex, seed?.dataTime, d.word, d.event)
+                        counter.add(d.number, ni, hex, seed?.dataTime, d.word, d.event, d.euroHits)
                         sb.setLength(0)
                         sb.append(d.number).append(';').append(r5(d.lat)).append(';').append(r5(d.lon)).append(';')
                             .append(d.nearest.name.replace(";", ",")).append(';').append(d.nearest.region).append(';')
                             .append(d.nearest.population).append(';').append(r3(d.distanceKm)).append(';')
                             .append(r3(d.radiusKm)).append(';').append(if (d.isHit) "1" else "0").append(';').append(hex)
                             .append(';').append(d.word).append(';').append(d.date).append(';').append(d.event)
+                            .append(';').append(d.euro).append(';').append(d.euroHits).append(';').append(d.euroInfo.replace(";", ","))
                         w.write(sb.toString()); w.newLine()
                         if (i % 2000 == 0) _state.update { it.copy(block = it.block?.copy(done = i)) }
                     }
@@ -694,7 +697,8 @@ object GeoEngine {
                                     p.getOrNull(7)?.toDoubleOrNull(), p.getOrNull(8), p.getOrNull(9),
                                     p.getOrNull(10), p.getOrNull(11)?.let { Words.show(it) },
                                     p.getOrNull(12)?.toIntOrNull()?.let { Events.get(it)?.text },
-                                    p.getOrNull(12)?.toIntOrNull()?.let { Events.get(it)?.url }))
+                                    p.getOrNull(12)?.toIntOrNull()?.let { Events.get(it)?.url },
+                                    p.getOrNull(13), p.getOrNull(14)?.toIntOrNull(), p.getOrNull(15)))
                             }
                         }
                     }
@@ -735,6 +739,7 @@ object GeoEngine {
             Xlsx.sheet("Siglos", rows(r.yearRows)),
             Xlsx.sheet("Mes del evento", rows(r.monthRows)),
             Xlsx.sheet("Tipo de evento", rows(r.weekdayRows)),
+            Xlsx.sheet("Euromillones", rows(r.euroRows)),
         )
     }
 
@@ -787,7 +792,7 @@ object GeoEngine {
                                 header = h
                                 cols = intArrayOf(h.indexOf("numero"), h.indexOf("latitud"), h.indexOf("longitud"),
                                     h.indexOf("ciudad"), h.indexOf("comunidad"), h.indexOf("semilla"),
-                                    h.indexOf("palabra"), h.indexOf("fecha"), h.indexOf("evento"))
+                                    h.indexOf("palabra"), h.indexOf("fecha"), h.indexOf("evento"), h.indexOf("euro_aciertos"))
                                 w.write(BlockStore.header()); w.newLine()
                                 return@forEach
                             }
@@ -806,7 +811,7 @@ object GeoEngine {
                             val date = Regex("""(\d{1,2})/(\d{1,2})/(\d{4})""").matchEntire(rawDate)?.destructured
                                 ?.let { (dd, mm, yy) -> "%s-%02d-%02d".format(yy, mm.toInt(), dd.toInt()) } ?: rawDate
                             val event = p.getOrNull(cols[8])?.toIntOrNull()?.takeIf { it in 0 until Events.size } ?: -1
-                            counter.add(num, ni, hex, null, word, event)
+                            counter.add(num, ni, hex, null, word, event, p.getOrNull(cols[9])?.toIntOrNull() ?: -1)
                             val n = g.nucleos.getOrNull(ni)
                             w.write("$num;${lat ?: ""};${lon ?: ""};${n?.name ?: town};${n?.region ?: region};${n?.population ?: ""};;;;$hex;$word;${if (event >= 0) Events.dateOf(event) else date};$event")
                             w.newLine()
@@ -928,7 +933,8 @@ object GeoEngine {
                 .append(';').append(d.id)
                 .append(';').append(a.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
                 .append(';').append(a.reason.replace(";", ",").replace("\n", " "))
-                .append(';').append(d.word).append(';').append(d.date).append(';').append(d.event).append('\n')
+                .append(';').append(d.word).append(';').append(d.date).append(';').append(d.event)
+                .append(';').append(d.euro).append(';').append(d.euroHits).append(';').append(d.euroInfo.replace(";", ",")).append('\n')
         }
         val tmp = File(app.filesDir, "geoloteria.tmp")
         tmp.writeText(sb.toString())
@@ -950,7 +956,8 @@ object GeoEngine {
                         if (p.size < 8) return@forEachLine
                         val n = g.nucleos.getOrNull(p[4].toIntOrNull() ?: -1) ?: return@forEachLine
                         val d = Draw(p[7].toLong(), p[1], p[2].toDouble(), p[3].toDouble(), n, p[5].toDouble(), p[6].toDouble(),
-                            p.getOrNull(10).orEmpty(), p.getOrNull(11).orEmpty(), p.getOrNull(12)?.toIntOrNull() ?: -1)
+                            p.getOrNull(10).orEmpty(), p.getOrNull(11).orEmpty(), p.getOrNull(12)?.toIntOrNull() ?: -1,
+                            p.getOrNull(13).orEmpty(), p.getOrNull(14)?.toIntOrNull() ?: -1, p.getOrNull(15).orEmpty())
                         val t = p.getOrNull(8)?.toLongOrNull()
                         when (p[0]) {
                             "A" -> alerts += Alert(d, p.getOrNull(9) ?: "Aviso", t?.let(::toTime) ?: LocalDateTime.now())
@@ -990,13 +997,14 @@ object GeoEngine {
             runCatching { flush() }
             val s = _state.value
             val header = listOf("Número", "Palabra", "Evento histórico", "Fecha del evento", "Wikipedia", "Latitud", "Longitud",
-                "En núcleo", "Ciudad", "Comunidad", "Habitantes", "Distancia (km)", "Radio (km)", "Generado el")
+                "En núcleo", "Ciudad", "Comunidad", "Habitantes", "Distancia (km)", "Radio (km)", "Generado el",
+                "Euromillón", "Aciertos máx. en el histórico", "Sorteo (si > 4 aciertos)")
             fun row(d: Draw, ts: Long): List<Any?> {
                 val e = Events.get(d.event)
                 return listOf(
                     d.number, d.word, e?.text, Words.show(d.date), e?.url, d.lat, d.lon, if (d.isHit) "Sí" else "No",
                     d.nearest.name, d.nearest.region, d.nearest.population, round2(d.distanceKm), round2(d.radiusKm),
-                    toTime(ts).format(TIME),
+                    toTime(ts).format(TIME), d.euro, d.euroHits.takeIf { it >= 0 }, d.euroInfo,
                 )
             }
             val max = Xlsx.MAX_ROWS - 1

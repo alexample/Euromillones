@@ -25,7 +25,7 @@ import kotlin.math.sqrt
  */
 const val BLOCK_SIZE = 400_000
 private const val TOTAL_NUMBERS = 100_000
-private const val CSV_HEADER = "numero;latitud;longitud;ciudad;comunidad;habitantes;distancia_km;radio_km;en_nucleo;semilla;palabra;fecha;evento"
+private const val CSV_HEADER = "numero;latitud;longitud;ciudad;comunidad;habitantes;distancia_km;radio_km;en_nucleo;semilla;palabra;fecha;evento;euromillon;euro_aciertos;euro_sorteo"
 
 /** Uso de cada hash solar dentro del bloque (para poder verificarlo). */
 data class SeedUse(val hex: String, val dataTime: String?, val count: Int)
@@ -87,12 +87,17 @@ data class BlockReport(
     val monthCrit: Double = 0.0,
     val weekdayRows: List<StatRow> = emptyList(),
     val weekdayCrit: Double = 0.0,
+    // Combinaciones de Euromillones cruzadas con el histórico
+    val euroN: Int = 0,
+    val euroDraws: Int = 0,
+    val euroRows: List<StatRow> = emptyList(),
+    val euroCrit: Double = 0.0,
 ) {
     val anomalies: Int
         get() = anomalousNumbers.size + digitRows.count { it.anomalous } + cityRows.count { it.anomalous } +
             regionRows.count { it.anomalous } + (if (abs(chi2Z) > 3.3) 1 else 0) + (if (abs(zerosZ) > 3.3) 1 else 0) +
             anomalousWords.size + anomalousDates.size + yearRows.count { it.anomalous } + monthRows.count { it.anomalous } +
-            weekdayRows.count { it.anomalous } + (if (wordN > 0 && abs(wordChi2Z) > 3.3) 1 else 0) +
+            weekdayRows.count { it.anomalous } + euroRows.count { it.anomalous } + (if (wordN > 0 && abs(wordChi2Z) > 3.3) 1 else 0) +
             (if (dateN > 0 && abs(dateChi2Z) > 3.3) 1 else 0)
 }
 
@@ -159,8 +164,11 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
     val days = IntArray(Events.size.coerceAtLeast(1))   // veces que ha salido cada evento histórico
     var wordN = 0
     var dateN = 0
+    var euroN = 0
+    val euroMax = IntArray(8)   // cuántas combinaciones tuvieron como máximo 0…7 aciertos
 
-    fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?, word: String = "", event: Int = -1) {
+    fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?, word: String = "", event: Int = -1, euroHits: Int = -1) {
+        if (euroHits in 0..7) { euroMax[euroHits]++; euroN++ }
         if (word.isNotEmpty()) {
             val wi = Words.index(word)
             if (wi in words.indices) { words[wi]++; wordN++ }
@@ -329,7 +337,31 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
         })
         val (weekdayRows, weekdayCrit) = grouped({ i -> Events.types[i].toString() }, { t -> Events.typeName(t.first()) })
 
+        // ---- Euromillones: combinaciones con 5, 6 o 7 aciertos en algún sorteo real ----
+        val draws = EuroHistory.size
+        fun comb(n: Int, k: Int): Double {
+            if (k < 0 || k > n) return 0.0
+            var r = 1.0
+            for (i in 1..k) r = r * (n - k + i) / i
+            return r
+        }
+        fun pDraw(k: Int): Double {   // P(aciertos ≥ k) en un sorteo (5 de 50 + 2 de 12)
+            var p = 0.0
+            for (a in 0..5) for (b in 0..2) if (a + b >= k)
+                p += comb(5, a) * comb(45, 5 - a) / comb(50, 5) * comb(2, b) * comb(10, 2 - b) / comb(12, 2)
+            return p
+        }
+        val euroCrit = Stats.zCrit(3)
+        val euroRows = if (euroN == 0 || draws == 0) emptyList() else (5..7).map { k ->
+            val c = (k..7).sumOf { euroMax[it] }
+            val p = 1 - (1 - pDraw(k)).pow(draws)
+            val e = euroN * p
+            val z = (c - e) / sqrt(euroN * p * (1 - p)).coerceAtLeast(1e-9)
+            StatRow("$k o más aciertos", if (k == 7) "5 números + 2 estrellas" else "", c, e, z, abs(z) > euroCrit)
+        }
+
         return BlockReport(
+            euroN = euroN, euroDraws = draws, euroRows = euroRows, euroCrit = euroCrit,
             wordN = wordN, wordDistinct = words.count { it > 0 }, wordTotal = wTotal, wordLambda = wLam,
             wordThreshold = wk, wordChi2Z = wChiZ, anomalousWords = anomalousWords, topWords = topWords,
             dateN = dateN, dateDistinct = days.count { it > 0 }, dateTotal = dTotal, dateLambda = dLam,
@@ -437,6 +469,7 @@ object BlockStore {
         .put("years", rowsToJson(r.yearRows)).put("yearCrit", r.yearCrit)
         .put("months", rowsToJson(r.monthRows)).put("monthCrit", r.monthCrit)
         .put("weekdays", rowsToJson(r.weekdayRows)).put("weekdayCrit", r.weekdayCrit)
+        .put("euroN", r.euroN).put("euroDraws", r.euroDraws).put("euro", rowsToJson(r.euroRows)).put("euroCrit", r.euroCrit)
 
     fun fromJson(o: JSONObject): BlockReport {
         val seeds = o.optJSONArray("seeds")
@@ -468,6 +501,8 @@ object BlockStore {
             yearRows = rowsFromJson(o.optJSONArray("years")), yearCrit = o.optDouble("yearCrit", 0.0),
             monthRows = rowsFromJson(o.optJSONArray("months")), monthCrit = o.optDouble("monthCrit", 0.0),
             weekdayRows = rowsFromJson(o.optJSONArray("weekdays")), weekdayCrit = o.optDouble("weekdayCrit", 0.0),
+            euroN = o.optInt("euroN"), euroDraws = o.optInt("euroDraws"), euroRows = rowsFromJson(o.optJSONArray("euro")),
+            euroCrit = o.optDouble("euroCrit", 0.0),
         )
     }
 }

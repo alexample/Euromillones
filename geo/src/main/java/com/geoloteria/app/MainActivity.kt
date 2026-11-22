@@ -184,6 +184,7 @@ fun App(vm: GeoViewModel = viewModel()) {
     // Número cuya búsqueda oficial está abierta dentro de la app (null = pantalla normal)
     var sellerNumber by rememberSaveable { mutableStateOf<String?>(null) }
     BackHandler(enabled = sellerNumber != null) { sellerNumber = null }
+    BackHandler(enabled = WikiNav.url != null) { WikiNav.url = null }
     val openSeller: (String) -> Unit = { number ->
         clipboard.setText(AnnotatedString(number))
         sellerNumber = number
@@ -200,6 +201,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                 title = {
                     Text(
                         when {
+                            WikiNav.url != null -> "Wikipedia"
                             sellerNumber != null -> "Dónde venden el $sellerNumber"
                             reportId == LIVE_REPORT -> "Bloque en curso (en vivo)"
                             reportId != null -> "Informe del bloque"
@@ -208,14 +210,19 @@ fun App(vm: GeoViewModel = viewModel()) {
                     )
                 },
                 navigationIcon = {
-                    if (sellerNumber != null || reportId != null) {
-                        IconButton(onClick = { sellerNumber = null; reportId = null }) {
+                    if (sellerNumber != null || reportId != null || WikiNav.url != null) {
+                        IconButton(onClick = { if (WikiNav.url != null) WikiNav.url = null else { sellerNumber = null; reportId = null } }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
                         }
                     }
                 },
                 actions = {
-                    if (sellerNumber != null) {
+                    WikiNav.url?.let { u ->
+                        TextButton(onClick = {
+                            runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(WikiNav.desktop(u)))) }
+                        }) { Text("Navegador", color = Color.White) }
+                    }
+                    if (sellerNumber != null && WikiNav.url == null) {
                         TextButton(onClick = {
                             runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BUSCAR_DECIMO))) }
                             Toast.makeText(ctx, "Número ${sellerNumber} copiado: pégalo en el buscador", Toast.LENGTH_LONG).show()
@@ -228,6 +235,10 @@ fun App(vm: GeoViewModel = viewModel()) {
     ) { padding ->
         sellerNumber?.let { n ->
             SellerWeb(n, Modifier.fillMaxSize().padding(padding))
+            return@Scaffold
+        }
+        WikiNav.url?.let { u ->
+            WikiPage(u, Modifier.fillMaxSize().padding(padding))
             return@Scaffold
         }
         reportId?.let { id ->
@@ -253,9 +264,9 @@ fun App(vm: GeoViewModel = viewModel()) {
                             style = MaterialTheme.typography.bodySmall)
                         WordDate(d, MaterialTheme.typography.bodyMedium, full = true)
                         Events.get(d.event)?.let { e ->
-                            TextButton(onClick = {
-                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(e.url))) }
-                            }) { Text("Abrir en Wikipedia: ${e.title.replace('_', ' ')}") }
+                            TextButton(onClick = { selected = null; WikiNav.url = e.url }) {
+                                Text("Abrir en Wikipedia: ${e.title.replace('_', ' ')}")
+                            }
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -561,7 +572,7 @@ fun App(vm: GeoViewModel = viewModel()) {
                         }
                     },
                     label = { Text("Buscar número, ciudad, palabra o fecha del evento") },
-                    placeholder = { Text("48213, Toledo, casa, 14/03/1967, año 1492…") },
+                    placeholder = { Text("48213, Toledo, casa, año 1492, 5 aciertos…") },
                 )
                 if (query.isNotBlank()) {
                     Text(
@@ -911,12 +922,18 @@ private fun WordDate(d: Draw, style: androidx.compose.ui.text.TextStyle, full: B
             style = style,
             color = Color(0xFF1D4ED8),
             textDecoration = TextDecoration.Underline,
-            modifier = Modifier.clickable {
-                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(e.url))) }
-            },
+            modifier = Modifier.clickable { WikiNav.url = e.url },
         )
     } else if (d.date.isNotEmpty()) {
         Text(Words.show(d.date), style = style, color = Teal)
+    }
+    if (d.euro.isNotEmpty()) {
+        Text("Euromillón: ${d.euro.replace(" + ", "  ★ ")}", style = style, fontFamily = FontFamily.Monospace)
+        if (d.euroInfo.isNotEmpty()) {
+            Text("🎯 ${d.euroInfo}", style = style, color = HitGreen, fontWeight = FontWeight.Bold)
+        } else if (full && d.euroHits >= 0) {
+            Text("Máximo en el histórico: ${d.euroHits} aciertos (se avisa a partir de ${EuroHistory.MIN_HITS})", style = style)
+        }
     }
 }
 

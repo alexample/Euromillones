@@ -12,7 +12,7 @@ data class HistEvent(
     val text: String,
     val title: String,    // artículo de Wikipedia
 ) {
-    val url: String get() = "https://es.wikipedia.org/wiki/" + title.replace(' ', '_')
+    val url: String get() = "https://es.wikipedia.org/wiki/" + android.net.Uri.encode(title.replace(' ', '_'), "_()-.,:!'")
     val year: Int get() = Events.yearOf(date)
 }
 

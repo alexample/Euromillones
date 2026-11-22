@@ -49,7 +49,17 @@ object Words {
     fun decorate(d: Draw, rnd: Random): Draw {
         val w = word(rnd)
         val e = Events.random(rnd)
-        return d.copy(word = w, event = e, date = Events.dateOf(e))
+        // Combinación de Euromillones con el mismo azar, cruzada con todos los sorteos reales
+        val (nums, stars) = EuroHistory.randomCombo(rnd)
+        val m = EuroHistory.best(nums, stars)
+        val info = if (m != null && m.hits >= EuroHistory.MIN_HITS) {
+            "${m.hits} aciertos (${m.numbers} números + ${m.stars} estrellas) en " +
+                m.draws.joinToString(", ") { (id, date) -> "el sorteo nº $id del ${Events.showDate(date)}" }
+        } else ""
+        return d.copy(
+            word = w, event = e, date = Events.dateOf(e),
+            euro = EuroHistory.format(nums, stars), euroHits = m?.hits ?: -1, euroInfo = info,
+        )
     }
 
     /** "1967-03-14" → "14/03/1967" (años antes de Cristo: "15/03/44 a. C.") */
