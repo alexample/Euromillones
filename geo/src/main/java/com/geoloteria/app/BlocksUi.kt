@@ -328,43 +328,42 @@ fun BlockReportScreen(r: BlockReport, modifier: Modifier = Modifier) {
         // ---- Fechas ----
         if (r.dateN > 0) {
             item {
-                Section("Fechas (1940-2026)")
-                Info("Con fecha", n0(r.dateN))
-                Info("Fechas distintas", "${n0(r.dateDistinct)} de ${n0(r.dateTotal)}")
-                Info("Media por fecha", "${d2(r.dateLambda)} veces · anómala a partir de ${r.dateThreshold}")
+                Section("Eventos históricos")
+                Info("Con evento", n0(r.dateN))
+                Info("Eventos distintos", "${n0(r.dateDistinct)} de ${n0(r.dateTotal)}")
+                Info("Media por evento", "${d2(r.dateLambda)} veces · anómalo a partir de ${r.dateThreshold}")
                 Verdict("Reparto uniforme (chi²)", "z = ${d2(r.dateChi2Z)}", abs(r.dateChi2Z) <= 3.3)
                 if (r.anomalousDates.isEmpty()) {
-                    Text("✓ Ninguna fecha ha salido de forma anómala.", color = Ok, style = MaterialTheme.typography.bodySmall)
+                    Text("✓ Ningún evento ha salido de forma anómala.", color = Ok, style = MaterialTheme.typography.bodySmall)
                 }
-                Text("Las que más han salido", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall,
+                Text("Los que más han salido", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp))
-                Row { H("Fecha", 90.dp); H("Día", 80.dp); H("Veces", 50.dp); H("Esp.", 50.dp); H("z", 50.dp) }
-                (r.anomalousDates + r.topDates.filter { t -> r.anomalousDates.none { it.label == t.label } }).forEach { x ->
-                    Row { C(x.label, 90.dp, x.anomalous, mono = true); C(x.detail, 80.dp, false); C("${x.count}", 50.dp, x.anomalous); C(d1(x.expected), 50.dp, false); C(d1(x.z), 50.dp, x.anomalous) }
-                }
             }
+            items(r.anomalousDates + r.topDates.filter { t -> r.anomalousDates.none { it.label == t.label } },
+                key = { "ev-" + it.detail + it.label }) { x -> CityLine(x) }
             item {
-                Section("Días de la semana")
-                Text("Anómalo si |z| > ${d2(r.weekdayCrit)}.", style = MaterialTheme.typography.bodySmall)
+                Section("Tipo de evento")
+                Text("Lo esperado es la proporción de cada tipo en Wikipedia. Anómalo si |z| > ${d2(r.weekdayCrit)}.",
+                    style = MaterialTheme.typography.bodySmall)
             }
             items(r.weekdayRows, key = { "wd-" + it.label }) { x -> CityLine(x) }
             item {
-                Section("Meses")
-                Text("Lo esperado tiene en cuenta los días de cada mes. Anómalo si |z| > ${d2(r.monthCrit)}.",
+                Section("Mes del evento")
+                Text("Lo esperado es la proporción de eventos de cada mes en Wikipedia. Anómalo si |z| > ${d2(r.monthCrit)}.",
                     style = MaterialTheme.typography.bodySmall)
             }
             items(r.monthRows, key = { "m-" + it.label }) { x -> CityLine(x) }
             item {
-                Section("Años")
+                Section("Siglos")
                 val bad = r.yearRows.count { it.anomalous }
                 Text(
-                    "Anómalo si |z| > ${d2(r.yearCrit)} (87 años). " +
-                        if (bad == 0) "✓ Ningún año fuera de lo normal. Se muestran los más desviados." else "⚠ $bad año(s) fuera de lo normal.",
+                    "Lo esperado es la proporción de eventos de cada siglo. Anómalo si |z| > ${d2(r.yearCrit)}. " +
+                        if (bad == 0) "✓ Ningún siglo fuera de lo normal." else "⚠ $bad siglo(s) fuera de lo normal.",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (bad == 0) Color.Unspecified else Red,
                 )
             }
-            items(r.yearRows.sortedByDescending { abs(it.z) }.take(15), key = { "y-" + it.label }) { x -> CityLine(x) }
+            items(r.yearRows, key = { "y-" + it.label }) { x -> CityLine(x) }
         }
 
         // ---- Comunidades ----

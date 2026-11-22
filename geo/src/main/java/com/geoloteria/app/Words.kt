@@ -45,9 +45,13 @@ object Words {
     /** Fecha al azar (todos los días con la misma probabilidad), en formato ISO aaaa-mm-dd. */
     fun date(rnd: Random): String = LocalDate.ofEpochDay(rnd.nextLong(FIRST_DAY, LAST_DAY + 1)).toString()
 
-    /** Añade palabra y fecha a un número recién generado. */
-    fun decorate(d: Draw, rnd: Random): Draw = d.copy(word = word(rnd), date = date(rnd))
+    /** Añade palabra y evento histórico (con su fecha) a un número recién generado. */
+    fun decorate(d: Draw, rnd: Random): Draw {
+        val w = word(rnd)
+        val e = Events.random(rnd)
+        return d.copy(word = w, event = e, date = Events.dateOf(e))
+    }
 
-    /** "1967-03-14" → "14/03/1967" */
-    fun show(iso: String): String = runCatching { LocalDate.parse(iso).format(SHOW) }.getOrDefault(iso)
+    /** "1967-03-14" → "14/03/1967" (años antes de Cristo: "15/03/44 a. C.") */
+    fun show(iso: String): String = Events.showDate(iso)
 }

@@ -44,7 +44,8 @@ data class Draw(
     val distanceKm: Double,
     val radiusKm: Double,
     val word: String = "",   // palabra del diccionario
-    val date: String = "",   // fecha 1940-2026 (aaaa-mm-dd)
+    val date: String = "",   // fecha del evento histórico (aaaa-mm-dd)
+    val event: Int = -1,     // evento histórico (posición en eventos.tsv)
 ) {
     val isHit: Boolean get() = radiusKm > 0 && distanceKm <= radiusKm
 }

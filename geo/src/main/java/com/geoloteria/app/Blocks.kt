@@ -25,7 +25,7 @@ import kotlin.math.sqrt
  */
 const val BLOCK_SIZE = 400_000
 private const val TOTAL_NUMBERS = 100_000
-private const val CSV_HEADER = "numero;latitud;longitud;ciudad;comunidad;habitantes;distancia_km;radio_km;en_nucleo;semilla;palabra;fecha"
+private const val CSV_HEADER = "numero;latitud;longitud;ciudad;comunidad;habitantes;distancia_km;radio_km;en_nucleo;semilla;palabra;fecha;evento"
 
 /** Uso de cada hash solar dentro del bloque (para poder verificarlo). */
 data class SeedUse(val hex: String, val dataTime: String?, val count: Int)
@@ -156,19 +156,16 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
     var n = 0
     val seeds = LinkedHashMap<String, Pair<String?, Int>>()
     val words = IntArray(Words.size.coerceAtLeast(1))
-    val days = IntArray(Words.DAYS)
+    val days = IntArray(Events.size.coerceAtLeast(1))   // veces que ha salido cada evento histórico
     var wordN = 0
     var dateN = 0
 
-    fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?, word: String = "", date: String = "") {
+    fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?, word: String = "", event: Int = -1) {
         if (word.isNotEmpty()) {
             val wi = Words.index(word)
             if (wi in words.indices) { words[wi]++; wordN++ }
         }
-        if (date.isNotEmpty()) {
-            val di = Words.dayIndex(date)
-            if (di in days.indices) { days[di]++; dateN++ }
-        }
+        if (event in days.indices && Events.size > 0) { days[event]++; dateN++ }
         val v = number.toInt()
         numbers[v]++
         for (p in 0 until 5) digits[p][number[p] - '0']++
@@ -293,20 +290,25 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
         var dk = 1
         if (dateN > 0) while (dTotal * Stats.poissonTail(dLam, dk) >= 0.05 && dk < 100_000) dk++
         val dSd = sqrt(dLam).coerceAtLeast(1e-9)
-        val dFmt = java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")
         val dOrder = if (dateN > 0) days.indices.sortedByDescending { days[it] } else emptyList()
-        fun dRow(i: Int) = StatRow(Words.dayAt(i).format(dFmt), Words.dayAt(i).dayOfWeek.getDisplayName(
-            java.time.format.TextStyle.FULL, java.util.Locale.forLanguageTag("es-ES")), days[i], dLam, (days[i] - dLam) / dSd, days[i] >= dk)
+        fun dRow(i: Int): StatRow {
+            val e = Events.get(i)
+            return StatRow(
+                e?.text?.let { if (it.length > 90) it.take(88) + "…" else it } ?: "evento $i",
+                (e?.let { Events.showDate(it.date) + " · " + Events.typeName(it.type) + " · evento $i" }).orEmpty(),
+                days[i], dLam, (days[i] - dLam) / dSd, days[i] >= dk,
+            )
+        }
         val anomalousDates = dOrder.takeWhile { days[it] >= dk }.map(::dRow)
         val topDates = dOrder.take(20).map(::dRow)
 
         // Años, meses y días de la semana: lo esperado es proporcional a los días que tiene cada uno
-        fun grouped(key: (java.time.LocalDate) -> String, label: (String) -> String): Pair<List<StatRow>, Double> {
+        fun grouped(key: (Int) -> String, label: (String) -> String): Pair<List<StatRow>, Double> {
             if (dateN == 0) return emptyList<StatRow>() to 0.0
             val cnt = LinkedHashMap<String, Int>()
-            val dayCount = LinkedHashMap<String, Int>()
+            val dayCount = LinkedHashMap<String, Int>()   // eventos de cada grupo en el conjunto de datos
             for (i in days.indices) {
-                val k = key(Words.dayAt(i))
+                val k = key(i)
                 cnt[k] = (cnt[k] ?: 0) + days[i]
                 dayCount[k] = (dayCount[k] ?: 0) + 1
             }
@@ -319,13 +321,13 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
             } to crit
         }
         val es = java.util.Locale.forLanguageTag("es-ES")
-        val (yearRows, yearCrit) = grouped({ it.year.toString() }, { it })
-        val (monthRows, monthCrit) = grouped({ "%02d".format(it.monthValue) }, { m ->
+        // "Años" = siglos, "Meses" = mes del evento, "Días de la semana" = tipo de evento
+        val (yearRows0, yearCrit) = grouped({ i -> "%06d".format(Events.years[i] / 100 + 1000) + "|" + Events.century(Events.years[i]) }, { it.substringAfter("|") })
+        val yearRows = yearRows0
+        val (monthRows, monthCrit) = grouped({ i -> "%02d".format(Events.months[i].toInt().coerceIn(1, 12)) }, { m ->
             java.time.Month.of(m.toInt()).getDisplayName(java.time.format.TextStyle.FULL, es)
         })
-        val (weekdayRows, weekdayCrit) = grouped({ it.dayOfWeek.value.toString() }, { d ->
-            java.time.DayOfWeek.of(d.toInt()).getDisplayName(java.time.format.TextStyle.FULL, es)
-        })
+        val (weekdayRows, weekdayCrit) = grouped({ i -> Events.types[i].toString() }, { t -> Events.typeName(t.first()) })
 
         return BlockReport(
             wordN = wordN, wordDistinct = words.count { it > 0 }, wordTotal = wTotal, wordLambda = wLam,
@@ -333,7 +335,7 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
             dateN = dateN, dateDistinct = days.count { it > 0 }, dateTotal = dTotal, dateLambda = dLam,
             dateThreshold = dk, dateChi2Z = dChiZ, anomalousDates = anomalousDates, topDates = topDates,
             yearRows = yearRows, yearCrit = yearCrit, monthRows = monthRows, monthCrit = monthCrit,
-            weekdayRows = weekdayRows.sortedBy { r -> listOf("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo").indexOf(r.label) },
+            weekdayRows = weekdayRows,
             weekdayCrit = weekdayCrit,
             id = id, created = created, n = n,
             mode = mode?.name ?: "DESCONOCIDO", pick = pick?.name ?: "", radius = cfg.encode(),

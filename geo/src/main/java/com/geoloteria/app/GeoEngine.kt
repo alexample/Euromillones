@@ -61,7 +61,7 @@ data class BlockProgress(val done: Int, val total: Int, val startedAt: Long, val
 
 enum class RankKind(val title: String) {
     CIUDADES("Ciudades"), NUMEROS("Números"), COMUNIDADES("Comunidades"),
-    PALABRAS("Palabras"), FECHAS("Fechas"), ANOS("Años"),
+    PALABRAS("Palabras"), FECHAS("Eventos"), ANOS("Años"),
 }
 
 /** Una fila del ranking: nombre, detalle, veces y el texto con el que buscarla. */
@@ -142,6 +142,7 @@ object GeoEngine {
         scope.launch {
             val g = Geo(app)
             runCatching { Words.load(app) }
+            runCatching { Events.load(app) }
             geo = g
             load(g)
             runCatching { liveRestore(g) }
@@ -434,7 +435,7 @@ object GeoEngine {
                     val p = line.split(";")
                     if (p.size >= 10 && p[0].length == 5) {
                         counter.add(p[0], byName[norm(p[3]) + "|" + norm(p[4])] ?: -1, p[9], null,
-                            p.getOrNull(10).orEmpty(), p.getOrNull(11).orEmpty())
+                            p.getOrNull(10).orEmpty(), p.getOrNull(12)?.toIntOrNull() ?: -1)
                     }
                 }
             }
@@ -465,10 +466,10 @@ object GeoEngine {
             }
             val seed = SolarEntropy.status.value.seed
             val hex = seed?.hex ?: "azar-local"
-            b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime, d.word, d.date)
+            b.counter.add(d.number, g.index[d.nearest] ?: -1, hex, seed?.dataTime, d.word, d.event)
             b.writer.write(
                 "${d.number};${r5(d.lat)};${r5(d.lon)};${d.nearest.name.replace(";", ",")};${d.nearest.region};" +
-                    "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex;${d.word};${d.date}",
+                    "${d.nearest.population};${r3(d.distanceKm)};${r3(d.radiusKm)};${if (d.isHit) 1 else 0};$hex;${d.word};${d.date};${d.event}",
             )
             b.writer.newLine()
             liveChanged = true
@@ -561,8 +562,8 @@ object GeoEngine {
             r.digitRows.firstOrNull { it.anomalous }?.let { add("cifra ${it.detail} en ${it.label}") }
             r.regionRows.firstOrNull { it.anomalous }?.let { add(it.label) }
             r.anomalousWords.firstOrNull()?.let { add("la palabra «${it.label}» ${it.count} veces") }
-            r.anomalousDates.firstOrNull()?.let { add("la fecha ${it.label} ${it.count} veces") }
-            r.yearRows.firstOrNull { it.anomalous }?.let { add("el año ${it.label}") }
+            r.anomalousDates.firstOrNull()?.let { add("el evento «${it.label.take(60)}» ${it.count} veces") }
+            r.yearRows.firstOrNull { it.anomalous }?.let { add(it.label) }
             r.monthRows.firstOrNull { it.anomalous }?.let { add(it.label) }
             r.weekdayRows.firstOrNull { it.anomalous }?.let { add("los ${it.label}") }
         }.joinToString(" · ").ifBlank { "reparto general fuera de lo normal" }
@@ -626,13 +627,13 @@ object GeoEngine {
                         } ?: error("No hay ciudades con radio mayor que 0")).let { Words.decorate(it, rnd) }
                         val hex = seed?.hex ?: "azar-local"
                         val ni = g.index[d.nearest] ?: -1
-                        counter.add(d.number, ni, hex, seed?.dataTime, d.word, d.date)
+                        counter.add(d.number, ni, hex, seed?.dataTime, d.word, d.event)
                         sb.setLength(0)
                         sb.append(d.number).append(';').append(r5(d.lat)).append(';').append(r5(d.lon)).append(';')
                             .append(d.nearest.name.replace(";", ",")).append(';').append(d.nearest.region).append(';')
                             .append(d.nearest.population).append(';').append(r3(d.distanceKm)).append(';')
                             .append(r3(d.radiusKm)).append(';').append(if (d.isHit) "1" else "0").append(';').append(hex)
-                            .append(';').append(d.word).append(';').append(d.date)
+                            .append(';').append(d.word).append(';').append(d.date).append(';').append(d.event)
                         w.write(sb.toString()); w.newLine()
                         if (i % 2000 == 0) _state.update { it.copy(block = it.block?.copy(done = i)) }
                     }
@@ -691,7 +692,9 @@ object GeoEngine {
                                 else emit(listOf<Any?>(p[0], p.getOrNull(1)?.toDoubleOrNull(), p.getOrNull(2)?.toDoubleOrNull(),
                                     p.getOrNull(3), p.getOrNull(4), p.getOrNull(5)?.toIntOrNull(), p.getOrNull(6)?.toDoubleOrNull(),
                                     p.getOrNull(7)?.toDoubleOrNull(), p.getOrNull(8), p.getOrNull(9),
-                                    p.getOrNull(10), p.getOrNull(11)?.let { Words.show(it) }))
+                                    p.getOrNull(10), p.getOrNull(11)?.let { Words.show(it) },
+                                    p.getOrNull(12)?.toIntOrNull()?.let { Events.get(it)?.text },
+                                    p.getOrNull(12)?.toIntOrNull()?.let { Events.get(it)?.url }))
                             }
                         }
                     }
@@ -717,7 +720,8 @@ object GeoEngine {
             listOf<Any?>("Esperado por número", round2(r.expectedPerNumber)), listOf<Any?>("Máximo de veces", r.maxCount),
             listOf<Any?>("Umbral de anomalía (veces)", r.highThreshold), listOf<Any?>("Anomalías totales", r.anomalies),
             listOf<Any?>("Palabras distintas", r.wordDistinct), listOf<Any?>("z chi² palabras", round2(r.wordChi2Z)),
-            listOf<Any?>("Fechas distintas", r.dateDistinct), listOf<Any?>("z chi² fechas", round2(r.dateChi2Z)),
+            listOf<Any?>("Eventos distintos", r.dateDistinct), listOf<Any?>("z chi² eventos", round2(r.dateChi2Z)),
+            listOf<Any?>("Huella SHA-256 de los eventos", Events.hash),
         ) + listOf(listOf<Any?>("")) + listOf(listOf<Any?>("Hash solar", "Hora dato UTC", "Números")) +
             r.seeds.map { listOf<Any?>(it.hex, it.dataTime, it.count) }
         return listOf(
@@ -727,10 +731,10 @@ object GeoEngine {
             Xlsx.sheet("Ciudades", rows(r.cityRows)),
             Xlsx.sheet("Comunidades", rows(r.regionRows)),
             Xlsx.sheet("Palabras", rows(r.anomalousWords + r.topWords.filter { t -> r.anomalousWords.none { it.label == t.label } })),
-            Xlsx.sheet("Fechas", rows(r.anomalousDates + r.topDates.filter { t -> r.anomalousDates.none { it.label == t.label } })),
-            Xlsx.sheet("Años", rows(r.yearRows)),
-            Xlsx.sheet("Meses", rows(r.monthRows)),
-            Xlsx.sheet("Dias semana", rows(r.weekdayRows)),
+            Xlsx.sheet("Eventos", rows(r.anomalousDates + r.topDates.filter { t -> r.anomalousDates.none { it.label == t.label } })),
+            Xlsx.sheet("Siglos", rows(r.yearRows)),
+            Xlsx.sheet("Mes del evento", rows(r.monthRows)),
+            Xlsx.sheet("Tipo de evento", rows(r.weekdayRows)),
         )
     }
 
@@ -783,7 +787,7 @@ object GeoEngine {
                                 header = h
                                 cols = intArrayOf(h.indexOf("numero"), h.indexOf("latitud"), h.indexOf("longitud"),
                                     h.indexOf("ciudad"), h.indexOf("comunidad"), h.indexOf("semilla"),
-                                    h.indexOf("palabra"), h.indexOf("fecha"))
+                                    h.indexOf("palabra"), h.indexOf("fecha"), h.indexOf("evento"))
                                 w.write(BlockStore.header()); w.newLine()
                                 return@forEach
                             }
@@ -801,9 +805,10 @@ object GeoEngine {
                             // Acepta aaaa-mm-dd o dd/mm/aaaa
                             val date = Regex("""(\d{1,2})/(\d{1,2})/(\d{4})""").matchEntire(rawDate)?.destructured
                                 ?.let { (dd, mm, yy) -> "%s-%02d-%02d".format(yy, mm.toInt(), dd.toInt()) } ?: rawDate
-                            counter.add(num, ni, hex, null, word, date)
+                            val event = p.getOrNull(cols[8])?.toIntOrNull()?.takeIf { it in 0 until Events.size } ?: -1
+                            counter.add(num, ni, hex, null, word, event)
                             val n = g.nucleos.getOrNull(ni)
-                            w.write("$num;${lat ?: ""};${lon ?: ""};${n?.name ?: town};${n?.region ?: region};${n?.population ?: ""};;;;$hex;$word;$date")
+                            w.write("$num;${lat ?: ""};${lon ?: ""};${n?.name ?: town};${n?.region ?: region};${n?.population ?: ""};;;;$hex;$word;${if (event >= 0) Events.dateOf(event) else date};$event")
                             w.newLine()
                             if (counter.n % 5000 == 0) _state.update { it.copy(block = it.block?.copy(done = counter.n)) }
                         }
@@ -842,8 +847,8 @@ object GeoEngine {
             RankKind.NUMEROS -> "number"
             RankKind.COMUNIDADES -> "region_key"
             RankKind.PALABRAS -> "word"
-            RankKind.FECHAS -> "date"
-            RankKind.ANOS -> "substr(date,1,4)"
+            RankKind.FECHAS -> "event"
+            RankKind.ANOS -> YEAR_EXPR
         }
         // Palabras y fechas: solo cuentan los números que las tienen
         val total = if (kind in setOf(RankKind.PALABRAS, RankKind.FECHAS, RankKind.ANOS)) db.countWith(col, hitsOnly) else db.count(hitsOnly)
@@ -858,14 +863,14 @@ object GeoEngine {
                 RankKind.COMUNIDADES -> RankRow(regionName[v] ?: v, "", c, v)
                 RankKind.PALABRAS -> RankRow(v, "", c, v)
                 RankKind.FECHAS -> {
-                    val d = runCatching { java.time.LocalDate.parse(v) }.getOrNull()
+                    val e = Events.get(v.toIntOrNull() ?: -1)
                     RankRow(
-                        Words.show(v),
-                        d?.dayOfWeek?.getDisplayName(java.time.format.TextStyle.FULL, Locale.forLanguageTag("es-ES")).orEmpty(),
-                        c, Words.show(v),
+                        e?.text?.let { if (it.length > 110) it.take(108) + "…" else it } ?: "evento $v",
+                        e?.let { Events.showDate(it.date) + " · " + Events.typeName(it.type) }.orEmpty(),
+                        c, "evento $v",
                     )
                 }
-                RankKind.ANOS -> RankRow(v, "", c, "año $v")
+                RankKind.ANOS -> RankRow(if ((v.toIntOrNull() ?: 0) < 0) "${-(v.toIntOrNull() ?: 0)} a. C." else v, "", c, "año $v")
             }
         }
         return Ranking(total, db.distinct(col, hitsOnly), rows)
@@ -923,7 +928,7 @@ object GeoEngine {
                 .append(';').append(d.id)
                 .append(';').append(a.time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
                 .append(';').append(a.reason.replace(";", ",").replace("\n", " "))
-                .append(';').append(d.word).append(';').append(d.date).append('\n')
+                .append(';').append(d.word).append(';').append(d.date).append(';').append(d.event).append('\n')
         }
         val tmp = File(app.filesDir, "geoloteria.tmp")
         tmp.writeText(sb.toString())
@@ -945,7 +950,7 @@ object GeoEngine {
                         if (p.size < 8) return@forEachLine
                         val n = g.nucleos.getOrNull(p[4].toIntOrNull() ?: -1) ?: return@forEachLine
                         val d = Draw(p[7].toLong(), p[1], p[2].toDouble(), p[3].toDouble(), n, p[5].toDouble(), p[6].toDouble(),
-                            p.getOrNull(10).orEmpty(), p.getOrNull(11).orEmpty())
+                            p.getOrNull(10).orEmpty(), p.getOrNull(11).orEmpty(), p.getOrNull(12)?.toIntOrNull() ?: -1)
                         val t = p.getOrNull(8)?.toLongOrNull()
                         when (p[0]) {
                             "A" -> alerts += Alert(d, p.getOrNull(9) ?: "Aviso", t?.let(::toTime) ?: LocalDateTime.now())
@@ -984,12 +989,16 @@ object GeoEngine {
         scope.launch(Dispatchers.IO) {
             runCatching { flush() }
             val s = _state.value
-            val header = listOf("Número", "Palabra", "Fecha (1940-2026)", "Latitud", "Longitud", "En núcleo", "Ciudad",
-                "Comunidad", "Habitantes", "Distancia (km)", "Radio (km)", "Generado el")
-            fun row(d: Draw, ts: Long): List<Any?> = listOf(
-                d.number, d.word, Words.show(d.date), d.lat, d.lon, if (d.isHit) "Sí" else "No", d.nearest.name,
-                d.nearest.region, d.nearest.population, round2(d.distanceKm), round2(d.radiusKm), toTime(ts).format(TIME),
-            )
+            val header = listOf("Número", "Palabra", "Evento histórico", "Fecha del evento", "Wikipedia", "Latitud", "Longitud",
+                "En núcleo", "Ciudad", "Comunidad", "Habitantes", "Distancia (km)", "Radio (km)", "Generado el")
+            fun row(d: Draw, ts: Long): List<Any?> {
+                val e = Events.get(d.event)
+                return listOf(
+                    d.number, d.word, e?.text, Words.show(d.date), e?.url, d.lat, d.lon, if (d.isHit) "Sí" else "No",
+                    d.nearest.name, d.nearest.region, d.nearest.population, round2(d.distanceKm), round2(d.radiusKm),
+                    toTime(ts).format(TIME),
+                )
+            }
             val max = Xlsx.MAX_ROWS - 1
             var nHits = 0
             var nAll = 0

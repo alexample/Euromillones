@@ -251,7 +251,12 @@ fun App(vm: GeoViewModel = viewModel()) {
                         )
                         Text("${coord(d.lat)}, ${coord(d.lon)}", fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall)
-                        WordDate(d, MaterialTheme.typography.bodyLarge)
+                        WordDate(d, MaterialTheme.typography.bodyMedium, full = true)
+                        Events.get(d.event)?.let { e ->
+                            TextButton(onClick = {
+                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(e.url))) }
+                            }) { Text("Abrir en Wikipedia: ${e.title.replace('_', ' ')}") }
+                        }
                         Spacer(Modifier.height(8.dp))
                         Text(
                             "«Dónde lo venden» abre el buscador oficial de Loterías y Apuestas del Estado y busca este número automáticamente.",
@@ -555,8 +560,8 @@ fun App(vm: GeoViewModel = viewModel()) {
                             IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Clear, contentDescription = "Borrar búsqueda") }
                         }
                     },
-                    label = { Text("Buscar número, ciudad, palabra o fecha") },
-                    placeholder = { Text("48213, Toledo, zambomba, 14/03/1967, año 1967…") },
+                    label = { Text("Buscar número, ciudad, palabra o fecha del evento") },
+                    placeholder = { Text("48213, Toledo, casa, 14/03/1967, año 1492…") },
                 )
                 if (query.isNotBlank()) {
                     Text(
@@ -834,18 +839,22 @@ private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, on
                 RankKind.NUMEROS -> "números distintos (de 100.000)"
                 RankKind.COMUNIDADES -> "comunidades"
                 RankKind.PALABRAS -> "palabras distintas (de ${thousands(Words.size.toLong())})"
-                RankKind.FECHAS -> "fechas distintas (de ${thousands(Words.DAYS.toLong())})"
-                RankKind.ANOS -> "años (de 87)"
+                RankKind.FECHAS -> "eventos distintos (de ${thousands(Events.size.toLong())})"
+                RankKind.ANOS -> "años distintos"
             }
             Text(
                 "${thousands(r.total)} ${if (hitsOnly) "aciertos" else "números"} · ${thousands(r.distinct)} $what." +
                     when (kind) {
                         RankKind.NUMEROS -> " Por azar, cada número debería salir unas ${num2(r.total / 100_000.0)} veces."
                         RankKind.PALABRAS -> " Por azar, cada palabra debería salir unas ${num2(r.total / Words.size.coerceAtLeast(1).toDouble())} veces."
-                        RankKind.FECHAS -> " Por azar, cada fecha debería salir unas ${num2(r.total / Words.DAYS.toDouble())} veces."
-                        RankKind.ANOS -> " Por azar, cada año debería salir unas ${num2(r.total * 365.25 / Words.DAYS)} veces."
+                        RankKind.FECHAS -> " Por azar, cada evento debería salir unas ${num2(r.total / Events.size.coerceAtLeast(1).toDouble())} veces."
+                        RankKind.ANOS -> " Los años con más eventos en Wikipedia (sobre todo los recientes) salen más, como es lógico."
                         else -> ""
-                    } + if (kind in setOf(RankKind.PALABRAS, RankKind.FECHAS, RankKind.ANOS)) " (Solo cuentan los números generados desde la versión 2.4.)" else "",
+                    } + when (kind) {
+                        RankKind.PALABRAS -> " (Solo cuentan los números generados desde la versión 2.4.)"
+                        RankKind.FECHAS, RankKind.ANOS -> " (Solo cuentan los números generados desde la versión 2.7.)"
+                        else -> ""
+                    },
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 4.dp),
             )
@@ -860,7 +869,7 @@ private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, on
                         Text(
                             row.label,
                             fontWeight = FontWeight.SemiBold,
-                            fontFamily = if (kind == RankKind.NUMEROS || kind == RankKind.FECHAS) FontFamily.Monospace else FontFamily.Default,
+                            fontFamily = if (kind == RankKind.NUMEROS) FontFamily.Monospace else FontFamily.Default,
                         )
                         if (row.detail.isNotEmpty()) Text(row.detail, style = MaterialTheme.typography.labelSmall)
                     }
@@ -884,17 +893,31 @@ private fun RankingCard(total: Long, expanded: Boolean, onToggle: () -> Unit, on
 
 private fun num2(x: Double) = String.format(es, "%.2f", x)
 
-/** «palabra» · dd/mm/aaaa del número (si lo tiene: los generados antes de esta versión no). */
+/**
+ * «palabra» y el evento histórico del número (los generados antes de la 2.7 tienen fecha sin evento).
+ * Tocar el evento abre su artículo en Wikipedia.
+ */
 @Composable
-private fun WordDate(d: Draw, style: androidx.compose.ui.text.TextStyle) {
-    if (d.word.isEmpty() && d.date.isEmpty()) return
-    Text(
-        listOfNotNull(d.word.takeIf { it.isNotEmpty() }?.let { "«$it»" }, d.date.takeIf { it.isNotEmpty() }?.let { Words.show(it) })
-            .joinToString(" · "),
-        style = style,
-        fontWeight = FontWeight.SemiBold,
-        color = Teal,
-    )
+private fun WordDate(d: Draw, style: androidx.compose.ui.text.TextStyle, full: Boolean = false) {
+    val ctx = LocalContext.current
+    if (d.word.isNotEmpty()) {
+        Text("«${d.word}»", style = style, fontWeight = FontWeight.SemiBold, color = Teal)
+    }
+    val e = Events.get(d.event)
+    if (e != null) {
+        val text = if (full || e.text.length <= 120) e.text else e.text.take(118) + "…"
+        Text(
+            "${Events.showDate(e.date)} · $text",
+            style = style,
+            color = Color(0xFF1D4ED8),
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier.clickable {
+                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(e.url))) }
+            },
+        )
+    } else if (d.date.isNotEmpty()) {
+        Text(Words.show(d.date), style = style, color = Teal)
+    }
 }
 
 @Composable

@@ -10,9 +10,10 @@ import android.database.sqlite.SQLiteOpenHelper
  * Índices por número, población y comunidad para que la búsqueda sea instantánea.
  */
 /** Columnas (o expresiones) por las que se puede hacer ranking. */
-val RANK_COLUMNS = setOf("nuc", "number", "region_key", "word", "date", "substr(date,1,4)")
+const val YEAR_EXPR = "CAST(substr(date, 1, length(date) - 6) AS INTEGER)"
+val RANK_COLUMNS = setOf("nuc", "number", "region_key", "word", "date", "event", YEAR_EXPR)
 
-class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null, 2) {
+class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -29,7 +30,8 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
                 town_key TEXT NOT NULL,
                 region_key TEXT NOT NULL,
                 word TEXT NOT NULL DEFAULT '',
-                date TEXT NOT NULL DEFAULT ''
+                date TEXT NOT NULL DEFAULT '',
+                event INTEGER NOT NULL DEFAULT -1
             )""",
         )
         db.execSQL("CREATE INDEX idx_number ON draws(number)")
@@ -42,6 +44,7 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
             db.execSQL("ALTER TABLE draws ADD COLUMN word TEXT NOT NULL DEFAULT ''")
             db.execSQL("ALTER TABLE draws ADD COLUMN date TEXT NOT NULL DEFAULT ''")
         }
+        if (oldVersion < 3) db.execSQL("ALTER TABLE draws ADD COLUMN event INTEGER NOT NULL DEFAULT -1")
     }
 
     /** Guarda un lote de números en una sola transacción (rápido aunque sean miles). */
@@ -51,8 +54,8 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         db.beginTransaction()
         try {
             val st = db.compileStatement(
-                "INSERT OR REPLACE INTO draws (id, number, lat, lon, nuc, dist, radius, hit, ts, town_key, region_key, word, date) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO draws (id, number, lat, lon, nuc, dist, radius, hit, ts, town_key, region_key, word, date, event) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             )
             for ((d, ts) in items) {
                 st.clearBindings()
@@ -69,6 +72,7 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
                 st.bindString(11, d.nearest.regionKey)
                 st.bindString(12, d.word)
                 st.bindString(13, d.date)
+                st.bindLong(14, d.event.toLong())
                 st.executeInsert()
             }
             db.setTransactionSuccessful()
@@ -98,14 +102,18 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         val dmy = Regex("""(\d{1,2})/(\d{1,2})/(\d{4})""").matchEntire(q)
         val year = Regex("""a[nñ]o\s*(\d{4})""").matchEntire(norm(q).replace("ano", "año"))
             ?: Regex("""a[nñ]o\s*(\d{4})""").matchEntire(q.lowercase())
+        val ev = Regex("""evento\s*(\d+)""").matchEntire(q.lowercase())
         if (q.isNotEmpty()) {
-            if (dmy != null) {
+            if (ev != null) {
+                parts += "event = ?"
+                args += ev.groupValues[1]
+            } else if (dmy != null) {
                 val (dd, mm, yy) = dmy.destructured
                 parts += "date = ?"
                 args += "%s-%02d-%02d".format(yy, mm.toInt(), dd.toInt())
             } else if (year != null) {
-                parts += "date LIKE ?"
-                args += "${year.groupValues[1]}-%"
+                parts += "$YEAR_EXPR = ?"
+                args += year.groupValues[1].toInt().toString()
             } else if (q.all { it.isDigit() }) {
                 parts += "number LIKE ?"
                 args += "%$q%"
@@ -133,6 +141,7 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         if (hitsOnly) parts += "hit = 1"
         if (column == "word") parts += "word <> ''"
         if (column.contains("date")) parts += "date <> ''"
+        if (column == "event" || column == YEAR_EXPR) parts += "event >= 0"
         return if (parts.isEmpty()) "" else " WHERE " + parts.joinToString(" AND ")
     }
 
@@ -154,13 +163,13 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         val (w, a) = where(query, hitsOnly)
         val out = ArrayList<Pair<Draw, Long>>()
         readableDatabase.rawQuery(
-            "SELECT id, number, lat, lon, nuc, dist, radius, ts, word, date FROM draws$w ORDER BY id DESC LIMIT $limit OFFSET $offset",
+            "SELECT id, number, lat, lon, nuc, dist, radius, ts, word, date, event FROM draws$w ORDER BY id DESC LIMIT $limit OFFSET $offset",
             a,
         ).use { c ->
             while (c.moveToNext()) {
                 val n = nucleos.getOrNull(c.getInt(4)) ?: continue
                 out += Draw(c.getLong(0), c.getString(1), c.getDouble(2), c.getDouble(3), n, c.getDouble(5), c.getDouble(6),
-                    c.getString(8) ?: "", c.getString(9) ?: "") to
+                    c.getString(8) ?: "", c.getString(9) ?: "", c.getInt(10)) to
                     c.getLong(7)
             }
         }
@@ -171,12 +180,12 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
     fun forEach(nucleos: List<Nucleo>, hitsOnly: Boolean, max: Int, block: (Draw, Long) -> Unit) {
         val w = if (hitsOnly) " WHERE hit = 1" else ""
         readableDatabase.rawQuery(
-            "SELECT id, number, lat, lon, nuc, dist, radius, ts, word, date FROM draws$w ORDER BY id DESC LIMIT $max", null,
+            "SELECT id, number, lat, lon, nuc, dist, radius, ts, word, date, event FROM draws$w ORDER BY id DESC LIMIT $max", null,
         ).use { c ->
             while (c.moveToNext()) {
                 val n = nucleos.getOrNull(c.getInt(4)) ?: continue
                 block(Draw(c.getLong(0), c.getString(1), c.getDouble(2), c.getDouble(3), n, c.getDouble(5), c.getDouble(6),
-                    c.getString(8) ?: "", c.getString(9) ?: ""), c.getLong(7))
+                    c.getString(8) ?: "", c.getString(9) ?: "", c.getInt(10)), c.getLong(7))
             }
         }
     }
