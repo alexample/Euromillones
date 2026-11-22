@@ -1,0 +1,24 @@
+name: Datos eventos históricos
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  eventos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar eventos de Wikipedia (366 días)
+        run: python3 scripts/build_events.py
+      - name: Guardar
+        run: |
+          git add geo/src/main/assets/eventos.tsv
+          if git diff --cached --quiet; then echo "Sin cambios"; else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "GeoLotería: eventos históricos de Wikipedia"
+            git push
+          fi
