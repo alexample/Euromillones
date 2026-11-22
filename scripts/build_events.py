@@ -48,7 +48,10 @@ def main():
                     pages = e.get("pages") or []
                     if y is None or not text or not pages:
                         continue
-                    title = pages[0].get("title") or ""
+                    # El artículo del evento o de la persona: se saltan listas ("Anexo:") y páginas de años
+                    titles = [pg.get("title") or "" for pg in pages]
+                    good = [t for t in titles if t and not t.startswith("Anexo:") and not t.lstrip("-").isdigit()]
+                    title = good[0] if good else (titles[0] if titles else "")
                     if not title:
                         continue
                     if prefix:
