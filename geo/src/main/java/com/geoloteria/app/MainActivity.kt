@@ -539,6 +539,24 @@ fun App(vm: GeoViewModel = viewModel()) {
                         Stat("Tasa", if (s.total > 0) pct(s.hitCount.toDouble() / s.total) else "–")
                     }
                 }
+                // Euromillones completos: siempre a la vista
+                Card(
+                    Modifier.fillMaxWidth().padding(top = 6.dp).clickable { query = "7 aciertos" },
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            "🏆 Euromillones completos (5 + 2): ${thousands(s.euroFull)}" +
+                                if (s.euroFullBlocks > 0) " · en bloques: ${thousands(s.euroFullBlocks)}" else "",
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            if (s.euroFull > 0) "Toca para verlos con la fecha y el sorteo que acertaron."
+                            else "Cuando una combinación acierte un sorteo real entero te llegará un aviso. " +
+                                "Por azar sale aproximadamente 1 de cada 70.000 números.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
                 Text(
                     if (s.mode == GenMode.CIUDADES) "En el modo «En ciudades» todos los números caen en una ciudad."
                     else "Con los radios actuales se espera que caiga en un núcleo urbano el " +

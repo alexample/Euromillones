@@ -377,6 +377,18 @@ fun BlockReportScreen(r: BlockReport, modifier: Modifier = Modifier) {
                 )
             }
             items(r.euroRows, key = { "eu-" + it.label }) { x -> CityLine(x) }
+            item {
+                Text(
+                    if (r.euroFull.isEmpty()) "Ningún Euromillón completo (5 + 2) en este bloque."
+                    else "🏆 Euromillones completos (5 + 2) en este bloque: ${r.euroFull.size}",
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            items(r.euroFull.size, key = { "full-$it" }) { i ->
+                Text(r.euroFull[i], style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            }
         }
 
         // ---- Comunidades ----

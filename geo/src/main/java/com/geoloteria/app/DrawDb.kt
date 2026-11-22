@@ -97,6 +97,11 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
             "SELECT COUNT(*) FROM draws" + if (hitsOnly) " WHERE hit = 1" else "", null,
         ).use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }
 
+    /** Números cuya combinación de Euromillones acertó al menos [k] en algún sorteo real. */
+    fun countEuro(k: Int): Long =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM draws WHERE euro_hits >= $k", null)
+            .use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }
+
     fun maxId(): Long =
         readableDatabase.rawQuery("SELECT IFNULL(MAX(id), 0) FROM draws", null)
             .use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }

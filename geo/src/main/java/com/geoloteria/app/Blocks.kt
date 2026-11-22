@@ -92,6 +92,7 @@ data class BlockReport(
     val euroDraws: Int = 0,
     val euroRows: List<StatRow> = emptyList(),
     val euroCrit: Double = 0.0,
+    val euroFull: List<String> = emptyList(),   // "número · combinación · sorteo" de los completos
 ) {
     val anomalies: Int
         get() = anomalousNumbers.size + digitRows.count { it.anomalous } + cityRows.count { it.anomalous } +
@@ -165,7 +166,8 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
     var wordN = 0
     var dateN = 0
     var euroN = 0
-    val euroMax = IntArray(8)   // cuántas combinaciones tuvieron como máximo 0…7 aciertos
+    val euroMax = IntArray(8)
+    val euroFull = ArrayList<String>()   // cuántas combinaciones tuvieron como máximo 0…7 aciertos
 
     fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?, word: String = "", event: Int = -1, euroHits: Int = -1) {
         if (euroHits in 0..7) { euroMax[euroHits]++; euroN++ }
@@ -361,7 +363,7 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
         }
 
         return BlockReport(
-            euroN = euroN, euroDraws = draws, euroRows = euroRows, euroCrit = euroCrit,
+            euroN = euroN, euroDraws = draws, euroRows = euroRows, euroCrit = euroCrit, euroFull = euroFull.take(200),
             wordN = wordN, wordDistinct = words.count { it > 0 }, wordTotal = wTotal, wordLambda = wLam,
             wordThreshold = wk, wordChi2Z = wChiZ, anomalousWords = anomalousWords, topWords = topWords,
             dateN = dateN, dateDistinct = days.count { it > 0 }, dateTotal = dTotal, dateLambda = dLam,
@@ -470,6 +472,7 @@ object BlockStore {
         .put("months", rowsToJson(r.monthRows)).put("monthCrit", r.monthCrit)
         .put("weekdays", rowsToJson(r.weekdayRows)).put("weekdayCrit", r.weekdayCrit)
         .put("euroN", r.euroN).put("euroDraws", r.euroDraws).put("euro", rowsToJson(r.euroRows)).put("euroCrit", r.euroCrit)
+        .put("euroFull", org.json.JSONArray(r.euroFull))
 
     fun fromJson(o: JSONObject): BlockReport {
         val seeds = o.optJSONArray("seeds")
@@ -503,6 +506,7 @@ object BlockStore {
             weekdayRows = rowsFromJson(o.optJSONArray("weekdays")), weekdayCrit = o.optDouble("weekdayCrit", 0.0),
             euroN = o.optInt("euroN"), euroDraws = o.optInt("euroDraws"), euroRows = rowsFromJson(o.optJSONArray("euro")),
             euroCrit = o.optDouble("euroCrit", 0.0),
+            euroFull = o.optJSONArray("euroFull")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
         )
     }
 }

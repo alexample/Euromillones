@@ -54,6 +54,9 @@ data class GeoState(
     // Bloque en tiempo real (lo que se va generando en automático o de uno en uno)
     val liveN: Int = 0,
     val liveReport: BlockReport? = null,
+    // Euromillones completos (5 números + 2 estrellas) en el automático y en los bloques
+    val euroFull: Long = 0,
+    val euroFullBlocks: Long = 0,
 )
 
 /** Progreso del bloque en curso. */
@@ -255,9 +258,11 @@ object GeoEngine {
                 total = s.total + 1,
                 hitCount = s.hitCount + if (d.isHit) 1 else 0,
                 historySize = s.total + 1,
+                euroFull = s.euroFull + if (d.euroHits >= 7) 1 else 0,
             )
         }
         dirty = true
+        if (d.euroHits >= 7) euroJackpot(d, inBlock = false)
         if (d.isHit) {
             vibrate()
             if (_state.value.stopOnHit) stop()
@@ -280,6 +285,22 @@ object GeoEngine {
         return null
     }
 
+    /** ¡Euromillón completo! Aviso siempre, sin necesidad de filtro. */
+    private fun euroJackpot(d: Draw, inBlock: Boolean) {
+        val reason = "🏆 Euromillón completo" + (if (inBlock) " (bloque)" else "") + ": ${d.euro} · " +
+            d.euroInfo.substringAfter(") en ", d.euroInfo)
+        _state.update { it.copy(alerts = (listOf(Alert(d, reason, LocalDateTime.now())) + it.alerts).take(ALERTS_MAX)) }
+        dirty = true
+        notifyAlert(d, reason)
+        vibrate()
+        if (inBlock) {
+            val p = app.getSharedPreferences("geoloteria", Context.MODE_PRIVATE)
+            val n = p.getLong("completos_bloques", 0) + 1
+            p.edit().putLong("completos_bloques", n).apply()
+            _state.update { it.copy(euroFullBlocks = n) }
+        }
+    }
+
     private fun checkAlerts(d: Draw) {
         val reason = alertReason(d) ?: return
         _state.update { it.copy(alerts = (listOf(Alert(d, reason, LocalDateTime.now())) + it.alerts).take(ALERTS_MAX)) }
@@ -299,7 +320,10 @@ object GeoEngine {
         )
         val n = androidx.core.app.NotificationCompat.Builder(app, ALERT_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("$reason · ${d.number}")
+            .setContentTitle(if (reason.startsWith("🏆")) "🏆 ¡Euromillón completo! · ${d.number}" else "$reason · ${d.number}")
+            .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(
+                (if (reason.startsWith("🏆")) reason.removePrefix("🏆 ") + "\n" else "") +
+                    "${d.nearest.name} (${d.nearest.region})"))
             .setContentText(
                 "${d.nearest.name} (${d.nearest.region}) a ${"%.2f".format(Locale.forLanguageTag("es-ES"), d.distanceKm)} km" +
                     if (d.isHit) " · en núcleo urbano" else "",
@@ -630,6 +654,10 @@ object GeoEngine {
                         val hex = seed?.hex ?: "azar-local"
                         val ni = g.index[d.nearest] ?: -1
                         counter.add(d.number, ni, hex, seed?.dataTime, d.word, d.event, d.euroHits)
+                        if (d.euroHits >= 7) {
+                            counter.euroFull += "${d.number} · ${d.euro} · ${d.euroInfo.substringAfter(") en ", d.euroInfo)}"
+                            euroJackpot(d.copy(id = nextId + i), inBlock = true)
+                        }
                         sb.setLength(0)
                         sb.append(d.number).append(';').append(r5(d.lat)).append(';').append(r5(d.lon)).append(';')
                             .append(d.nearest.name.replace(";", ",")).append(';').append(d.nearest.region).append(';')
@@ -982,6 +1010,8 @@ object GeoEngine {
                 total = total,
                 hitCount = db.count(hitsOnly = true),
                 historySize = total,
+                euroFull = db.countEuro(7),
+                euroFullBlocks = app.getSharedPreferences("geoloteria", Context.MODE_PRIVATE).getLong("completos_bloques", 0),
             )
         }
         if (migrate.isNotEmpty()) save()
