@@ -207,7 +207,7 @@ private fun Escenario(e: Estado, running: Boolean, vel: Float, voz: Boolean, onV
                         color = if (e.cantoPremio) Rojo else Color.Unspecified, fontWeight = FontWeight.SemiBold,
                     )
                     if (last != null) Text(
-                        "Última: ${Canto.n5(last.numero)} → ${last.cat.nombre} · tabla ${last.tabla}, alambre ${last.alambre}, bola ${last.pos}",
+                        "Última: ${Canto.n5(last.numero)} → ${last.cat.nombre} · a las ${hora(last.t)} · tabla ${last.tabla}, alambre ${last.alambre}, bola ${last.pos}",
                         style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
                     )
                 }
@@ -322,7 +322,10 @@ private fun FilaBola(x: Extraccion, grande: Boolean = false) {
             color = if (x.cat.grande) Rojo else Color.Unspecified)
         Text(if (grande) x.cat.nombre else "${x.cat.bola} €", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
             fontWeight = if (x.cat.grande) FontWeight.Bold else FontWeight.Normal)
-        Text("T${x.tabla}·A${x.alambre}·${x.pos} ${hora(x.t)}", style = MaterialTheme.typography.labelSmall)
+        Column(horizontalAlignment = Alignment.End) {
+            Text(hora(x.t), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+            Text("T${x.tabla}·A${x.alambre}·${x.pos}", style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
@@ -472,7 +475,11 @@ private fun TablaVista(sid: Long, e: Estado) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             (1..10).forEach { t -> FilterChip(selected = tabla == t, onClick = { n = t }, label = { Text("T$t") }) }
         }
-        Text("Tabla $tabla · ${filas.size} de 200 bolas de cada clase (10 alambres de 20)", style = MaterialTheme.typography.bodySmall)
+        Text(
+            "Tabla $tabla · ${filas.size} de 200 bolas de cada clase (10 alambres de 20)" +
+                if (filas.isNotEmpty()) " · de ${hora(filas.first().t)} a ${hora(filas.last().t)}" else "",
+            style = MaterialTheme.typography.bodySmall,
+        )
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             (1..10).forEach { a ->
                 val al = filas.filter { it.alambre == a }
@@ -487,6 +494,7 @@ private fun TablaVista(sid: Long, e: Estado) {
                                             Text(Canto.n5(b.numero), fontFamily = FontFamily.Monospace, fontSize = 13.sp,
                                                 fontWeight = FontWeight.Bold, color = if (b.cat.grande) Rojo else Color.Unspecified)
                                             Text(b.cat.bola, fontSize = 10.sp, color = if (b.cat.grande) Rojo else Color.Gray)
+                                            Text(hora(b.t), fontSize = 9.sp, color = Color.Gray)
                                         }
                                     }
                                     repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }

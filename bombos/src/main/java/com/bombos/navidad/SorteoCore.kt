@@ -138,12 +138,13 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         const val T_GIRO = 180.0
         const val T_MEZCLA = 8.0
         const val T_ASIENTO = 3.0
-        const val T_SACAR = 1.2
+        // Calibrado para que el sorteo dure como el real (unas 4 h 15: de 9:10 a ~13:25)
+        const val T_SACAR = 1.4
         const val T_ATASCO = 8.0
-        const val T_CANTA_NUM = 2.6
-        const val T_CANTA_PEDREA = 1.4
+        const val T_CANTA_NUM = 2.9
+        const val T_CANTA_PEDREA = 1.7
         const val T_CANTA_GRANDE = 6.0
-        const val T_INSERTA = 0.8
+        const val T_INSERTA = 1.0
         const val T_CIERRE_TABLA = 150.0
         const val T_LISTA = 2_700.0
         const val T_FLY = 0.7
