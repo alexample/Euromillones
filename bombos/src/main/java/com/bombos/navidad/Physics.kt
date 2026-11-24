@@ -27,12 +27,13 @@ import kotlin.random.Random
  * Unidades: metros, segundos. y hacia arriba. Centro del bombo = (0, 0).
  */
 class Drum(
-    val radius: Float,               // radio interior de la jaula (m)
+    override val radius: Float,               // radio interior de la jaula (m)
     capacity: Int,
-    val ballR: Float = 0.0094f,      // radio de bola: 18,8 mm de diámetro
-) {
-    var n = 0
+    override val ballR: Float = 0.0094f,      // radio de bola: 18,8 mm de diámetro
+) : Bombo {
+    override var n = 0
         private set
+    override val es3D = false
     private var cap = capacity
     var x = FloatArray(cap); private set
     var y = FloatArray(cap); private set
@@ -44,13 +45,13 @@ class Drum(
     var id = IntArray(cap); private set
 
     /** Ángulo y velocidad angular de la jaula (rad, rad/s; positivo = antihorario). */
-    var angle = 0f
-    var omega = 0f
-    var targetOmega = 0f
-    var gateOpen = false
+    override var angle = 0f
+    override var omega = 0f
+    override var targetOmega = 0f
+    override var gateOpen = false
 
     /** Bolas que han salido por la compuerta (en orden de salida: la primera es la «de abajo»). */
-    val exited = ArrayDeque<Int>()
+    override val exited = ArrayDeque<Int>()
 
     private val g = 9.81f
     private val restitution = 0.25f
@@ -74,17 +75,20 @@ class Drum(
         cap = c
     }
 
-    fun clear() { n = 0; exited.clear() }
+    override fun clear() { n = 0; exited.clear() }
+    override fun idAt(i: Int) = id[i]
+    override fun activo() = true
+    override fun stepFor(dt: Float, budgetNs: Long): Float { step(dt, 48); return dt }
 
     /** Añade una bola en (bx, by) con velocidad (ux, uy). */
-    fun add(bx: Float, by: Float, ident: Int, ux: Float = 0f, uy: Float = 0f) {
+    override fun add(bx: Float, by: Float, ident: Int, ux: Float, uy: Float) {
         ensure(n + 1)
         x[n] = bx; y[n] = by; vx[n] = ux; vy[n] = uy; id[n] = ident
         n++
     }
 
     /** Quita la bola i (la última ocupa su sitio). Devuelve su identidad. */
-    fun removeAt(i: Int): Int {
+    override fun removeAt(i: Int): Int {
         val ident = id[i]
         val last = n - 1
         x[i] = x[last]; y[i] = y[last]; vx[i] = vx[last]; vy[i] = vy[last]; id[i] = id[last]
@@ -93,7 +97,7 @@ class Drum(
     }
 
     /** ¿Cabe una bola nueva en (bx, by) sin solaparse con otra? (búsqueda directa, solo para la carga). */
-    fun isFree(bx: Float, by: Float): Boolean {
+    override fun isFree(bx: Float, by: Float): Boolean {
         val d2 = (ballR * 2f) * (ballR * 2f) * 0.95f
         if (bx * bx + by * by > (radius - ballR) * (radius - ballR)) return false
         for (i in 0 until n) {
@@ -107,7 +111,7 @@ class Drum(
      * Coloca [ids] ya asentadas en el fondo (empaquetado hexagonal), para retomar un sorteo
      * o para avanzar muy deprisa sin ver la carga.
      */
-    fun fillSettled(ids: IntArray, rnd: Random) {
+    override fun fillSettled(ids: IntArray, rnd: Random) {
         clear()
         ensure(ids.size)
         val d = ballR * 2.02f
@@ -162,7 +166,7 @@ class Drum(
         if (n == 0) return
         val subs = ceil(dt / (1f / 480f)).toInt().coerceIn(1, maxSub)
         val h = dt / subs
-        repeat(subs) { substep(h) }
+        repeat(subs) { substep(h); if (exited.isNotEmpty()) gateOpen = false }
     }
 
     private fun substep(h: Float) {
@@ -251,7 +255,7 @@ class Drum(
     }
 
     /** La bola más cercana a la compuerta (para forzar la salida si se atasca). */
-    fun lowest(): Int {
+    override fun lowest(): Int {
         var best = -1
         var by = Float.MAX_VALUE
         for (k in 0 until n) if (y[k] < by) { by = y[k]; best = k }
@@ -259,7 +263,7 @@ class Drum(
     }
 
     /** Copia de posiciones para dibujar: [x0, y0, x1, y1, …]. */
-    fun snapshot(out: FloatArray?): FloatArray {
+    override fun snapshot(out: FloatArray?): FloatArray {
         val a = if (out != null && out.size >= n * 2) out else FloatArray(max(16, n * 2 + 64))
         for (k in 0 until n) { a[2 * k] = x[k]; a[2 * k + 1] = y[k] }
         return a

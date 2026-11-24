@@ -52,6 +52,14 @@ object Sorteo {
     @Volatile var frame: Frame? = null
         private set
 
+    /** Física completa 3D (las 100.000 bolas) para el próximo sorteo nuevo. */
+    private val _modo3d = MutableStateFlow(false)
+    val modo3d: StateFlow<Boolean> = _modo3d.asStateFlow()
+    private val _prueba = MutableStateFlow<String?>(null)
+    val prueba: StateFlow<String?> = _prueba.asStateFlow()
+    private val _probando = MutableStateFlow(false)
+    val probando: StateFlow<Boolean> = _probando.asStateFlow()
+
     fun init(ctx: Context) {
         if (::app.isInitialized) return
         app = ctx.applicationContext
@@ -59,10 +67,13 @@ object Sorteo {
         SolarEntropy.start()
         core = SorteoCore(db) { SolarEntropy.random() }
         core.cantos = { s -> _cantos.tryEmit(s) }
-        _velocidad.value = app.getSharedPreferences("bombos", Context.MODE_PRIVATE).getFloat("velocidad", 1f)
+        val prefs = app.getSharedPreferences("bombos", Context.MODE_PRIVATE)
+        _velocidad.value = prefs.getFloat("velocidad", 1f)
+        _modo3d.value = prefs.getBoolean("modo3d", false)
+        _prueba.value = prefs.getString("prueba", null)
         synchronized(lock) {
             val c = db.enCurso()
-            if (c != null) core.retomar(c.first, c.second) else core.nuevo(semilla())
+            if (c != null) core.retomar(c.first, c.second, c.third) else core.nuevo(semilla(), _modo3d.value)
             _estado.value = core.publicar()
             frame = core.frame()
         }
@@ -137,13 +148,59 @@ object Sorteo {
 
     fun nuevo() {
         pausar()
-        synchronized(lock) { core.flush(); core.nuevo(semilla()) }
+        synchronized(lock) { core.flush(); core.nuevo(semilla(), _modo3d.value) }
         _estado.value = core.publicar()
         _version.value++
         _mensaje.value = "Sorteo nuevo preparado: pulsa ▶"
     }
 
     fun limpiarMensaje() { _mensaje.value = null }
+
+    fun setModo3d(v: Boolean) {
+        _modo3d.value = v
+        app.getSharedPreferences("bombos", Context.MODE_PRIVATE).edit().putBoolean("modo3d", v).apply()
+        _mensaje.value = if (v) "Física completa 3D: se usará en el próximo sorteo nuevo" else "Corte 2D: se usará en el próximo sorteo nuevo"
+    }
+
+    /**
+     * PRUEBA DE RENDIMIENTO: mueve el bombo grande con sus 100.000 bolas girando a 8 rpm y mide
+     * cuántos segundos de giro simula este móvil por cada segundo real.
+     */
+    fun probar() {
+        if (_probando.value) return
+        pausar()
+        _probando.value = true
+        _prueba.value = "Midiendo… (unos 30 segundos)"
+        scope.launch {
+            val r = runCatching {
+                val d = Drum3D(0.79f, 100_064)
+                val rnd = kotlin.random.Random(1)
+                d.fillSettled(IntArray(100_000) { it }, rnd)
+                d.stepFor(0.15f, Long.MAX_VALUE)                 // se asientan
+                d.omega = Drum.omegaFromRpm(8f); d.targetOmega = d.omega
+                d.stepFor(0.1f, Long.MAX_VALUE)                  // calentamiento
+                val t0 = System.nanoTime()
+                var sim = 0f
+                while (System.nanoTime() - t0 < 20_000_000_000L && sim < 4f) sim += d.stepFor(0.25f, Long.MAX_VALUE)
+                val real = (System.nanoTime() - t0) / 1e9
+                d.close()
+                val f = sim / real
+                val nucleos = Runtime.getRuntime().availableProcessors()
+                // En un sorteo los bombos se mueven unos 29 minutos en total (giro inicial, 91 mezclas
+                // de alambre y la salida de 1.807 parejas); el resto del tiempo las bolas están quietas.
+                val activo = 1_750.0
+                val extra = activo * (1.0 / f - 1.0).coerceAtLeast(0.0)
+                val total = 3.0 * 3600 + 45 * 60 + extra
+                "Núcleos: $nucleos · 1 s de giro con 100.000 bolas tarda ${"%.1f".format(1 / f)} s " +
+                    "(${"%.2f".format(f)}× del tiempo real). Un sorteo completo en 3D duraría unas " +
+                    "${(total / 3600).toInt()} h ${((total % 3600) / 60).toInt()} min (el real, unas 3 h 45 min)."
+            }
+            val txt = r.getOrElse { "Error en la prueba: ${it.message}" }
+            _prueba.value = txt
+            app.getSharedPreferences("bombos", Context.MODE_PRIVATE).edit().putString("prueba", txt).apply()
+            _probando.value = false
+        }
+    }
 
     fun borrar(id: Long) {
         scope.launch(Dispatchers.IO) {

@@ -5,15 +5,16 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
-data class SorteoInfo(val id: Long, val creado: Long, val inicio: Long, val fase: String, val terminado: Boolean, val semilla: String, val extraidas: Int)
+data class SorteoInfo(val id: Long, val creado: Long, val inicio: Long, val fase: String, val terminado: Boolean, val semilla: String, val extraidas: Int, val modo3d: Boolean = false)
 
 /** Sorteos simulados y todas sus bolas (número + premio, tabla, alambre y hora). */
-class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 1), Store {
+class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Store {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE sorteos (id INTEGER PRIMARY KEY AUTOINCREMENT, creado INTEGER NOT NULL, inicio INTEGER NOT NULL,
-               fase TEXT NOT NULL DEFAULT 'LISTO', terminado INTEGER NOT NULL DEFAULT 0, semilla TEXT NOT NULL DEFAULT '')""",
+               fase TEXT NOT NULL DEFAULT 'LISTO', terminado INTEGER NOT NULL DEFAULT 0, semilla TEXT NOT NULL DEFAULT '',
+               modo INTEGER NOT NULL DEFAULT 0)""",
         )
         db.execSQL(
             """CREATE TABLE bolas (sorteo INTEGER NOT NULL, orden INTEGER NOT NULL, tabla INTEGER NOT NULL, alambre INTEGER NOT NULL,
@@ -23,11 +24,13 @@ class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 1), Stor
         db.execSQL("CREATE INDEX bolas_premio ON bolas (sorteo, premio)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE sorteos ADD COLUMN modo INTEGER NOT NULL DEFAULT 0")
+    }
 
-    override fun nuevo(semilla: String, inicio: Long): Long =
+    override fun nuevo(semilla: String, inicio: Long, modo3d: Boolean): Long =
         writableDatabase.insert("sorteos", null, ContentValues().apply {
-            put("creado", System.currentTimeMillis()); put("inicio", inicio); put("semilla", semilla)
+            put("creado", System.currentTimeMillis()); put("inicio", inicio); put("semilla", semilla); put("modo", if (modo3d) 1 else 0)
         })
 
     override fun guardar(sorteo: Long, filas: List<Extraccion>) {
@@ -69,18 +72,18 @@ class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 1), Stor
             out
         }
 
-    override fun enCurso(): Pair<Long, String>? =
-        readableDatabase.rawQuery("SELECT id, fase FROM sorteos WHERE terminado = 0 ORDER BY id DESC LIMIT 1", null).use { c ->
-            if (c.moveToFirst()) c.getLong(0) to c.getString(1) else null
+    override fun enCurso(): Triple<Long, String, Boolean>? =
+        readableDatabase.rawQuery("SELECT id, fase, modo FROM sorteos WHERE terminado = 0 ORDER BY id DESC LIMIT 1", null).use { c ->
+            if (c.moveToFirst()) Triple(c.getLong(0), c.getString(1), c.getInt(2) == 1) else null
         }
 
     fun sorteos(): List<SorteoInfo> =
         readableDatabase.rawQuery(
-            "SELECT s.id, s.creado, s.inicio, s.fase, s.terminado, s.semilla, (SELECT COUNT(*) FROM bolas b WHERE b.sorteo = s.id) " +
+            "SELECT s.id, s.creado, s.inicio, s.fase, s.terminado, s.semilla, (SELECT COUNT(*) FROM bolas b WHERE b.sorteo = s.id), s.modo " +
                 "FROM sorteos s ORDER BY s.id DESC", null,
         ).use { c ->
             val out = ArrayList<SorteoInfo>()
-            while (c.moveToNext()) out += SorteoInfo(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getInt(4) == 1, c.getString(5), c.getInt(6))
+            while (c.moveToNext()) out += SorteoInfo(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getInt(4) == 1, c.getString(5), c.getInt(6), c.getInt(7) == 1)
             out
         }
 

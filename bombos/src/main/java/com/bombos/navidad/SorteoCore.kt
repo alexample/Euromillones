@@ -18,12 +18,12 @@ data class Extraccion(
 
 /** Dónde se guarda el sorteo (SQLite en el móvil; en memoria en las pruebas). */
 interface Store {
-    fun nuevo(semilla: String, inicio: Long): Long
+    fun nuevo(semilla: String, inicio: Long, modo3d: Boolean): Long
     fun guardar(sorteo: Long, filas: List<Extraccion>)
     fun fase(sorteo: Long, fase: String)
     fun terminar(sorteo: Long)
     fun extracciones(sorteo: Long): List<Extraccion>
-    fun enCurso(): Pair<Long, String>?   // sorteo sin terminar y su fase
+    fun enCurso(): Triple<Long, String, Boolean>?   // sorteo sin terminar, su fase y si es 3D
 }
 
 /** Fases reguladas del sorteo, en orden. */
@@ -84,6 +84,7 @@ enum class Paso { MEZCLA, ASIENTO, SACANDO, CANTA_NUMERO, CANTA_PREMIO, CELEBRA,
 class Frame(
     val numXY: FloatArray, val numN: Int, val numAngle: Float, val numGate: Boolean,
     val preXY: FloatArray, val preN: Int, val preAngle: Float, val preGate: Boolean,
+    val stride: Int,   // 2 = x,y (corte 2D) · 3 = x,y,z (bombo completo 3D)
     val numR: Float, val preR: Float, val ballR: Float,
     val copaNum: String?, val copaPre: String?, val fly: Float,   // 0…1 bajando por la trompeta; -1 quieta
     val tolva: Float,   // 0…1 cuánto queda en las tolvas durante la carga
@@ -105,6 +106,8 @@ data class Estado(
     val liras: Int = 0,
     val fisica: Boolean = true,
     val semilla: String = "",
+    val modo3d: Boolean = false,
+    val esperandoFisica: Boolean = false,   // el reloj va al ritmo que da el móvil
 )
 
 /**
@@ -157,9 +160,34 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
 
     val bolas = Cat.bolas()
     val numR = 0.79f                                    // bombo grande: esfera de 1,58 m
-    val preR = Drum.radiusFor(Cat.TOTAL_BOLAS, 0.40f)  // sección del bombo pequeño
-    val num = Drum(numR, NUM_VISIBLES + 64)
-    val pre = Drum(preR, Cat.TOTAL_BOLAS + 16)
+    var preR = Drum.radiusFor(Cat.TOTAL_BOLAS, 0.40f)  // sección del bombo pequeño
+        private set
+    var modo3d = false
+        private set
+    var num: Bombo = Drum(numR, NUM_VISIBLES + 64)
+        private set
+    var pre: Bombo = Drum(preR, Cat.TOTAL_BOLAS + 16)
+        private set
+    /** Presupuesto de cálculo de física por llamada a tick (ns). */
+    var presupuesto = 35_000_000L
+
+    /** Bombo pequeño en 3D: esfera de unos 0,9 m (medida estimada; no está publicada). */
+    private val PRE_R_3D = 0.45f
+
+    private fun crearBombos(tresD: Boolean) {
+        if (num.es3D == tresD) { num.clear(); pre.clear(); modo3d = tresD; return }
+        (num as? Drum3D)?.close(); (pre as? Drum3D)?.close()
+        modo3d = tresD
+        if (tresD) {
+            preR = PRE_R_3D
+            num = Drum3D(numR, NUMEROS + 64)
+            pre = Drum3D(preR, Cat.TOTAL_BOLAS + 16)
+        } else {
+            preR = Drum.radiusFor(Cat.TOTAL_BOLAS, 0.40f)
+            num = Drum(numR, NUM_VISIBLES + 64)
+            pre = Drum(preR, Cat.TOTAL_BOLAS + 16)
+        }
+    }
 
     var estado = Estado(); private set
     var cantos: ((String) -> Unit)? = null
@@ -171,6 +199,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
 
     // Bombo de números: las que quedan (para elegir al azar sin repetir)
     private val pool = IntArray(NUMEROS) { it }
+    private val posPool = IntArray(NUMEROS) { it }
     private var poolN = NUMEROS
     // Bombo de premios fuera de la física (modo rápido): las que quedan
     private val quedanPremios = ArrayList<Int>()
@@ -192,15 +221,16 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
 
     // ------------------------------------------------------------------ inicio
 
-    fun nuevo(semilla: String) {
+    fun nuevo(semilla: String, tresD: Boolean = false) {
         year = java.time.LocalDate.now().year
-        val id = store.nuevo(semilla, hora(year, 12, 21, 10, 0))
+        val id = store.nuevo(semilla, hora(year, 12, 21, 10, 0), tresD)
+        crearBombos(tresD)
         reset()
-        estado = Estado(sorteo = id, fase = Fase.LISTO, reloj = hora(year, 12, 21, 10, 0), semilla = semilla)
+        estado = Estado(sorteo = id, fase = Fase.LISTO, reloj = hora(year, 12, 21, 10, 0), semilla = semilla, modo3d = tresD)
     }
 
     private fun reset() {
-        for (i in 0 until NUMEROS) pool[i] = i
+        for (i in 0 until NUMEROS) { pool[i] = i; posPool[i] = i }
         poolN = NUMEROS
         quedanPremios.clear(); quedanPremios.addAll(bolas.indices)
         copaNum.clear(); copaPre.clear(); actualNum = -1; actualPre = -1
@@ -214,7 +244,8 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
     }
 
     /** Retoma un sorteo a medias (después de cerrar la app). */
-    fun retomar(id: Long, fase: String) {
+    fun retomar(id: Long, fase: String, tresD: Boolean = false) {
+        crearBombos(tresD)
         reset()
         val hechas = store.extracciones(id).sortedBy { it.orden }
         val sacados = BooleanArray(NUMEROS)
@@ -228,7 +259,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         }
         while (ultimas.size > 60) ultimas.removeLast()
         poolN = 0
-        for (i in 0 until NUMEROS) if (!sacados[i]) pool[poolN++] = i
+        for (i in 0 until NUMEROS) if (!sacados[i]) { posPool[i] = poolN; pool[poolN++] = i }
         // Quita del bombo de premios una bola de cada premio ya salido
         quedanPremios.clear()
         val vistas = IntArray(Cat.entries.size)
@@ -239,7 +270,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         val f = runCatching { Fase.valueOf(fase) }.getOrDefault(Fase.LISTO)
         year = java.time.LocalDate.now().year
         val reloj = last?.t ?: hora(year, 12, 21, 10, 0)
-        estado = estado.copy(sorteo = id, reloj = reloj)
+        estado = estado.copy(sorteo = id, reloj = reloj, modo3d = tresD)
         if (hechas.isNotEmpty() || f.ordinal >= Fase.EXTRACCION.ordinal) {
             llenarAsentados()
             if (quedanPremios.isEmpty()) entrar(Fase.FIN)
@@ -253,10 +284,38 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
     private fun llenarAsentados() {
         val r = rnd()
         pre.fillSettled(quedanPremios.shuffled(r).toIntArray(), r)
-        num.fillSettled(IntArray(objetivoVisibles()) { -1 }, r)
+        if (num.es3D) num.fillSettled(ordenTolvas(), r)
+        else num.fillSettled(IntArray(objetivoVisibles()) { -1 }, r)
     }
 
-    private fun objetivoVisibles() = ceil(poolN.toDouble() * NUM_VISIBLES / NUMEROS).toInt()
+    /**
+     * Orden en que caen las bolas de números en el bombo 3D: las liras van en orden (00000-00499,
+     * 00500-00999…) y se vacían en dos tolvas a la vez, una con la primera mitad y otra con la segunda.
+     * Así, al empezar, abajo están las primeras de cada mitad: la mezcla la tiene que hacer el bombo.
+     */
+    private fun ordenTolvas(): IntArray {
+        val quedan = BooleanArray(NUMEROS)
+        for (k in 0 until poolN) quedan[pool[k]] = true
+        val out = IntArray(poolN)
+        var k = 0
+        val half = NUMEROS / 2
+        for (i in 0 until half) {
+            if (quedan[i]) out[k++] = i
+            if (quedan[half + i]) out[k++] = half + i
+        }
+        return out
+    }
+
+    private fun objetivoVisibles() = if (num.es3D) poolN else ceil(poolN.toDouble() * NUM_VISIBLES / NUMEROS).toInt()
+
+    private fun quitarDelPool(v: Int) {
+        if (v < 0 || v >= NUMEROS) return
+        val k = posPool[v]
+        if (k >= poolN || pool[k] != v) return
+        val last = pool[poolN - 1]
+        pool[k] = last; posPool[last] = k
+        poolN--
+    }
 
     // ------------------------------------------------------------------ fases
 
@@ -285,7 +344,12 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         faseTotal = dur
         when (f) {
             Fase.NOCHE -> estado = estado.copy(reloj = hora(year, 12, 22, 8, 0))
-            Fase.CARGA -> { num.clear(); pre.clear(); vertidas = 0.0; cargaOrden = null }
+            Fase.CARGA -> {
+                num.clear(); pre.clear(); vertidas = 0.0; cargaOrden = null
+                // En 3D las 100.000 bolas no se pueden «verter» una a una: se colocan como las deja la tolva
+                // y se van mostrando a medida que se vacían las tolvas.
+                if (num.es3D) llenarAsentados()
+            }
             Fase.GIRO -> { asegurarCargados(); arrancar() }
             Fase.CIERRE_TABLA -> parar()
             Fase.FIN -> { parar(); store.terminar(estado.sorteo); estado = estado.copy(canto = "¡Fin del sorteo!") }
@@ -305,11 +369,11 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         val r = rnd()
         if (pre.n == 0 || num.n == 0) { llenarAsentados(); return }
         val dentro = HashSet<Int>()
-        for (i in 0 until pre.n) dentro += pre.id[i]
+        for (i in 0 until pre.n) dentro += pre.idAt(i)
         quedanPremios.filter { it !in dentro && it !in copaPre }.forEach { b ->
             pre.add((r.nextFloat() - 0.5f) * preR * 0.6f, (r.nextFloat() - 0.2f) * preR * 0.6f, b)
         }
-        while (num.n < objetivoVisibles()) num.add((r.nextFloat() - 0.5f) * numR * 0.6f, (r.nextFloat() - 0.2f) * numR * 0.6f, -1)
+        if (!num.es3D) while (num.n < objetivoVisibles()) num.add((r.nextFloat() - 0.5f) * numR * 0.6f, (r.nextFloat() - 0.2f) * numR * 0.6f, -1)
     }
 
     private fun siguienteFase() {
@@ -357,8 +421,21 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
      * Avanza [dt] segundos del sorteo. [fisicaDt] = tiempo que se simula de física (puede ser menor
      * si el móvil no da para más). Devuelve false si el sorteo ha terminado.
      */
-    fun tick(dt: Double, fisicaDt: Float = 0f): Boolean {
+    fun tick(dt0: Double, fisicaDt: Float = 0f): Boolean {
         if (estado.fase == Fase.TERMINADO) return false
+        var dt = dt0
+        var fisicaHecha = false
+        esperandoFisica = false
+        // Bombo completo 3D: la física manda. Si el móvil no llega, el reloj del sorteo va más despacio.
+        if (num.es3D && fisica && fisicaDt > 0f && estado.fase != Fase.LISTO && estado.fase != Fase.CARGA) {
+            val sim = num.stepFor(fisicaDt, presupuesto)
+            pre.stepFor(sim, presupuesto)
+            fisicaHecha = true
+            if ((num.activo() || pre.activo()) && sim < fisicaDt * 0.98f) {
+                esperandoFisica = true
+                dt = min(dt, sim.toDouble())
+            }
+        }
         var left = dt
         var guard = 0
         while (left > 1e-9 && guard++ < 10_000) {
@@ -381,10 +458,10 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
             if (restante <= 1e-9) terminarPaso()
         }
         if (fly >= 0) { fly += dt / T_FLY; if (fly > 1) fly = -1.0 }
-        if (estado.fase == Fase.CARGA && fisicaDt > 0f) verter(fisicaDt)
-        if (fisicaDt > 0f) {
-            num.step(fisicaDt, 48)
-            pre.step(fisicaDt, 48)
+        if (estado.fase == Fase.CARGA && fisicaDt > 0f && !num.es3D) verter(fisicaDt)
+        if (fisicaDt > 0f && !fisicaHecha) {
+            num.stepFor(fisicaDt, presupuesto)
+            pre.stepFor(fisicaDt, presupuesto)
         }
         return estado.fase != Fase.TERMINADO
     }
@@ -400,6 +477,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         if (estado.fase == Fase.RECUENTO) liras = (((faseTotal - restante) / T_LIRA).toInt()).coerceAtMost(LIRAS_NUMEROS + LIRAS_PREMIOS)
     }
     private var acumulado = 0.0
+    private var esperandoFisica = false
 
     /** Carga: las tolvas vierten las bolas por arriba mientras el bombo gira despacio. */
     private fun verter(fdt: Float) {
@@ -485,11 +563,12 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
 
     private fun recogerSalidas() {
         while (num.exited.isNotEmpty()) {
-            num.exited.removeFirst()
+            val b = num.exited.removeFirst()
+            if (num.es3D && b >= 0) { quitarDelPool(b); copaNum.addLast(b); num.gateOpen = false; fly = 0.0; continue }
             copaNum.addLast(sacarNumero())
             num.gateOpen = false
             // Mantiene la proporción de bolas visibles
-            if (num.n < objetivoVisibles()) {
+            if (!num.es3D && num.n < objetivoVisibles()) {
                 val r = rnd()
                 num.add((r.nextFloat() - 0.5f) * numR * 0.4f, numR * 0.6f, -1)
             }
@@ -506,7 +585,10 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
 
     /** Si una compuerta se atasca, el operario empuja la bola de abajo. */
     private fun forzarSalida() {
-        if (copaNum.isEmpty()) { val i = num.lowest(); if (i >= 0) { num.removeAt(i); num.exited.addLast(-1) } else num.exited.addLast(-1) }
+        if (copaNum.isEmpty()) {
+            val i = num.lowest()
+            if (i >= 0) { val b = num.removeAt(i); num.exited.addLast(if (num.es3D) b else -1) } else num.exited.addLast(-1)
+        }
         if (copaPre.isEmpty()) {
             val i = pre.lowest()
             if (i >= 0) pre.exited.addLast(pre.removeAt(i))
@@ -519,21 +601,25 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
     private fun sacarNumero(): Int {
         val k = rnd().nextInt(poolN)
         val v = pool[k]
-        pool[k] = pool[poolN - 1]
-        poolN--
+        quitarDelPool(v)
         return v
     }
 
     /** Modo rápido: una bola al azar de cada bombo (mezcla perfecta). */
     private fun sacarAlAzar() {
         if (copaNum.isEmpty()) {
-            copaNum.addLast(sacarNumero())
-            if (num.n > objetivoVisibles() && num.n > 0) num.removeAt(rnd().nextInt(num.n))
+            if (num.es3D && num.n > 0) {
+                val b = num.removeAt(rnd().nextInt(num.n))
+                quitarDelPool(b); copaNum.addLast(b)
+            } else {
+                copaNum.addLast(sacarNumero())
+                if (num.n > objetivoVisibles() && num.n > 0) num.removeAt(rnd().nextInt(num.n))
+            }
         }
         if (copaPre.isEmpty() && quedanPremios.isNotEmpty()) {
             val b = quedanPremios.removeAt(rnd().nextInt(quedanPremios.size))
             // quita esa bola del dibujo si está
-            for (i in 0 until pre.n) if (pre.id[i] == b) { pre.removeAt(i); break }
+            for (i in 0 until pre.n) if (pre.idAt(i) == b) { pre.removeAt(i); break }
             copaPre.addLast(b)
         }
         fly = 0.0
@@ -585,20 +671,28 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         estado = estado.copy(
             paso = paso, progreso = prog, extraidas = extraidas, quedan = quedan.copyOf(),
             ultimas = ultimas.toList(), mayores = mayores.toList(), liras = liras, fisica = fisica,
+            modo3d = modo3d, esperandoFisica = esperandoFisica,
         )
         return estado
     }
 
-    private var bufNum: FloatArray? = null
-    private var bufPre: FloatArray? = null
+    // Doble búfer: se escribe en uno mientras la pantalla dibuja el otro (sin copiar 300.000 números por imagen)
+    private val bufNum = arrayOfNulls<FloatArray>(2)
+    private val bufPre = arrayOfNulls<FloatArray>(2)
+    private var cara = 0
 
     fun frame(): Frame {
-        bufNum = num.snapshot(bufNum)
-        bufPre = pre.snapshot(bufPre)
+        cara = 1 - cara
+        val bn = num.snapshot(bufNum[cara]).also { bufNum[cara] = it }
+        val bp = pre.snapshot(bufPre[cara]).also { bufPre[cara] = it }
         val cn = (copaNum.firstOrNull() ?: actualNum.takeIf { paso != Paso.SACANDO && it >= 0 })?.let { Canto.n5(it) }
         val cp = (copaPre.firstOrNull() ?: actualPre.takeIf { paso != Paso.SACANDO && it >= 0 })?.let { bolas[it].bola }
         val tolva = if (estado.fase == Fase.CARGA) (restante / faseTotal).toFloat().coerceIn(0f, 1f) else 0f
-        return Frame(bufNum!!.copyOf(num.n * 2), num.n, num.angle, num.gateOpen, bufPre!!.copyOf(pre.n * 2), pre.n, pre.angle, pre.gateOpen,
+        val st = if (num.es3D) 3 else 2
+        // En la carga 3D se ven solo las bolas que ya han caído (de abajo arriba)
+        val nn = if (num.es3D && estado.fase == Fase.CARGA) (num.n * (1f - tolva)).toInt() else num.n
+        val np = if (num.es3D && estado.fase == Fase.CARGA) (pre.n * (1f - tolva)).toInt() else pre.n
+        return Frame(bn, nn, num.angle, num.gateOpen, bp, np, pre.angle, pre.gateOpen, st,
             numR, preR, num.ballR, cn, cp, fly.toFloat(), tolva)
     }
 

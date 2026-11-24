@@ -252,6 +252,7 @@ private fun Escenario(e: Estado, running: Boolean, vel: Float, voz: Boolean, onV
                 Text("  Cantar con voz (hasta 2×)", style = MaterialTheme.typography.bodySmall)
             }
         }
+        item { Fisica3D(e) }
         item {
             Text("Bombo de premios: quedan", fontWeight = FontWeight.SemiBold)
             Text(Cat.entries.joinToString(" · ") { "${corto(it)} ${e.quedan[it.ordinal]}" }, style = MaterialTheme.typography.bodySmall)
@@ -262,13 +263,40 @@ private fun Escenario(e: Estado, running: Boolean, vel: Float, voz: Boolean, onV
         }
         item { Text("Últimas bolas", fontWeight = FontWeight.SemiBold) }
         items(e.ultimas.take(30)) { x -> FilaBola(x) }
-        item {
+        if (!e.modo3d) item {
             Text(
                 "Física: sección vertical de cada bombo con bolas de boj de 18,8 mm y 3 g; el grande (1,58 m) muestra " +
                     "${miles(SorteoCore.NUM_VISIBLES)} bolas que representan las 100.000 y el de premios simula las 1.807 una a una. " +
                     "Semilla del azar: ${e.semilla.take(16)}… (rayos X del Sol, NOAA)",
                 style = MaterialTheme.typography.labelSmall,
             )
+        }
+    }
+}
+
+@Composable
+private fun Fisica3D(e: Estado) {
+    val m3 by Sorteo.modo3d.collectAsState()
+    val prueba by Sorteo.prueba.collectAsState()
+    val probando by Sorteo.probando.collectAsState()
+    Card {
+        Column(Modifier.padding(12.dp)) {
+            Text("Física completa 3D", fontWeight = FontWeight.Bold)
+            Text(
+                if (e.modo3d) "Este sorteo usa el bombo completo: las 100.000 bolas una a una, cada una con su número, y la física decide qué bola sale de los dos bombos."
+                else "Este sorteo usa el corte 2D (rápido).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (e.esperandoFisica) Text("⏳ El móvil va más despacio que el tiempo real: el reloj del sorteo espera a la física.",
+                style = MaterialTheme.typography.bodySmall, color = Rojo)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = m3, onCheckedChange = Sorteo::setModo3d)
+                Text("  Usar 3D (100.000 bolas) en el próximo sorteo nuevo", style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedButton(onClick = Sorteo::probar, enabled = !probando) { Text(if (probando) "Midiendo…" else "Prueba de rendimiento") }
+            prueba?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            Text("Con física completa la velocidad útil es 1×: si el móvil no llega, el sorteo dura más. Conviene tenerlo enchufado.",
+                style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -306,8 +334,8 @@ private fun Bombos(e: Estado) {
     LaunchedEffect(Unit) { while (true) withFrameNanos { tick = it } }
     val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND; color = Boj.toArgb() } }
     val text = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; isFakeBoldText = true } }
-    val bufA = remember { FloatArray(6000) }
-    val bufB = remember { FloatArray(4000) }
+    val bufA = remember { Array(3) { FloatArray(200_400) } }
+    val bufB = remember { Array(3) { FloatArray(4_000) } }
     Canvas(Modifier.fillMaxWidth().height(330.dp).background(Color(0xFF3B0A1A), RoundedCornerShape(12.dp))) {
         if (tick < 0L) return@Canvas
         val f = Sorteo.frame ?: return@Canvas
@@ -318,8 +346,8 @@ private fun Bombos(e: Estado) {
         val rs = f.preR * s
         val cb = Offset(w * 0.27f, h * 0.40f)
         val cs = Offset(w * 0.76f, h * 0.40f + (rb - rs) * 0.4f)
-        bombo(cb, rb, f.numAngle, f.numGate, f.numXY, f.numN, s, f.ballR, paint, bufA)
-        bombo(cs, rs, f.preAngle, f.preGate, f.preXY, f.preN, s, f.ballR, paint, bufB)
+        bombo(cb, rb, f.numAngle, f.numGate, f.numXY, f.numN, f.stride, f.numR, s, f.ballR, paint, bufA)
+        bombo(cs, rs, f.preAngle, f.preGate, f.preXY, f.preN, f.stride, f.preR, s, f.ballR, paint, bufB)
         // Tolvas durante la carga
         if (f.tolva > 0f) {
             tolva(Offset(cb.x - rb * 0.35f, cb.y - rb * 1.05f), rb * 0.28f, f.tolva)
@@ -338,17 +366,38 @@ private fun Bombos(e: Estado) {
     }
 }
 
-private fun DrawScope.bombo(c: Offset, r: Float, angle: Float, gate: Boolean, xy: FloatArray, n: Int, s: Float, ballR: Float,
-                            paint: Paint, buf: FloatArray) {
+private val CAPAS = intArrayOf(0xFF8A6E3E.toInt(), 0xFFC2A36B.toInt(), 0xFFE9CF9B.toInt())   // fondo, medio, delante
+
+private fun DrawScope.bombo(c: Offset, r: Float, angle: Float, gate: Boolean, xy: FloatArray, n: Int, stride: Int, R: Float, s: Float, ballR: Float,
+                            paint: Paint, buf: Array<FloatArray>) {
     // Patas
     drawLine(Oro.copy(alpha = 0.7f), Offset(c.x - r * 0.6f, c.y + r * 1.25f), Offset(c.x, c.y + r * 0.2f), strokeWidth = 3.dp.toPx())
     drawLine(Oro.copy(alpha = 0.7f), Offset(c.x + r * 0.6f, c.y + r * 1.25f), Offset(c.x, c.y + r * 0.2f), strokeWidth = 3.dp.toPx())
     drawCircle(Color(0x22FFFFFF), r, c)
-    // Bolas
-    val k = min(n, buf.size / 2)
-    for (i in 0 until k) { buf[2 * i] = c.x + xy[2 * i] * s; buf[2 * i + 1] = c.y - xy[2 * i + 1] * s }
+    // Bolas (en 3D, por capas de profundidad: las de detrás más oscuras)
     paint.strokeWidth = (ballR * 2f * s).coerceAtLeast(2f)
-    drawIntoCanvas { it.nativeCanvas.drawPoints(buf, 0, k * 2, paint) }
+    if (stride == 2) {
+        val k = min(n, buf[2].size / 2)
+        for (i in 0 until k) { buf[2][2 * i] = c.x + xy[2 * i] * s; buf[2][2 * i + 1] = c.y - xy[2 * i + 1] * s }
+        paint.color = CAPAS[2]
+        drawIntoCanvas { it.nativeCanvas.drawPoints(buf[2], 0, k * 2, paint) }
+    } else {
+        val cnt = IntArray(3)
+        val lim = min(n, xy.size / 3)
+        for (i in 0 until lim) {
+            val zz = xy[3 * i + 2]
+            val capa = if (zz < -R * 0.33f) 0 else if (zz < R * 0.33f) 1 else 2
+            val b = buf[capa]
+            val k = cnt[capa]
+            if (2 * k + 1 >= b.size) continue
+            b[2 * k] = c.x + xy[3 * i] * s; b[2 * k + 1] = c.y - xy[3 * i + 1] * s
+            cnt[capa] = k + 1
+        }
+        for (capa in 0..2) {
+            paint.color = CAPAS[capa]
+            drawIntoCanvas { it.nativeCanvas.drawPoints(buf[capa], 0, cnt[capa] * 2, paint) }
+        }
+    }
     // Jaula de latón que gira
     for (j in 0 until 8) {
         val a = angle + j * (PI / 4).toFloat()
