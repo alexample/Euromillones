@@ -1,0 +1,27 @@
+name: Datos Navidad y Niño
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [scripts/probe_lnac.py, scripts/build_loterias.py]
+
+permissions:
+  contents: write
+
+jobs:
+  loterias:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar
+        run: |
+          if [ -f scripts/build_loterias.py ]; then python3 scripts/build_loterias.py; else python3 scripts/probe_lnac.py; fi
+      - name: Guardar
+        run: |
+          git add data geo/src/main/assets || true
+          if git diff --cached --quiet; then echo "Sin cambios"; else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Datos: premios de Navidad y del Niño"
+            git pull --rebase && git push
+          fi
