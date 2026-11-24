@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Bombos de Navidad</string>
+    <color name="ic_bg">#9F1239</color>
+    <style name="Theme.Bombos" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

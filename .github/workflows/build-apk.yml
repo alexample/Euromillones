@@ -32,6 +32,7 @@ jobs:
           gradle assembleDebug --no-daemon
           cp app/build/outputs/apk/debug/app-debug.apk Euromillones.apk
           cp geo/build/outputs/apk/debug/geo-debug.apk GeoLoteria.apk
+          cp bombos/build/outputs/apk/debug/bombos-debug.apk BombosNavidad.apk
 
       - uses: actions/upload-artifact@v4
         with:
@@ -39,6 +40,7 @@ jobs:
           path: |
             Euromillones.apk
             GeoLoteria.apk
+            BombosNavidad.apk
 
       - name: Publicar en Releases (descarga directa desde el móvil)
         uses: softprops/action-gh-release@v2
@@ -49,3 +51,4 @@ jobs:
           files: |
             Euromillones.apk
             GeoLoteria.apk
+            BombosNavidad.apk

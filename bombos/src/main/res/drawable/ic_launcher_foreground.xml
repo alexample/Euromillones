@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Bombo: esfera con aros y bola -->
+    <path android:strokeColor="#FDE68A" android:strokeWidth="4" android:fillColor="#00000000"
+        android:pathData="M54,30 A20,20 0 1,1 53.99,30 Z" />
+    <path android:strokeColor="#FDE68A" android:strokeWidth="2.5" android:fillColor="#00000000"
+        android:pathData="M34,50 L74,50 M54,30 C44,38 44,62 54,70 C64,62 64,38 54,30" />
+    <path android:fillColor="#FFFFFF" android:pathData="M54,74 A6,6 0 1,1 53.99,74 Z" />
+    <path android:fillColor="#FDE68A" android:pathData="M42,84 L66,84 L62,90 L46,90 Z" />
+</vector>
