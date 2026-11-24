@@ -1,8 +1,7 @@
 package com.bombos.navidad
 
-import java.util.concurrent.Callable
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.LockSupport
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -75,7 +74,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
 
     // ---- Hilos ----
     private val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
-    private val pool: ExecutorService = Executors.newFixedThreadPool(threads) { r -> Thread(r, "bombo3d").apply { isDaemon = true; priority = Thread.MAX_PRIORITY } }
+    private val team = Equipo(threads)
 
     // ---- Rejilla 3D (solo en la caja que ocupan las bolas) ----
     private val cell = ballR * 2f
@@ -199,9 +198,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
 
     private fun parallel(task: (from: Int, to: Int) -> Unit) {
         if (threads == 1 || n < 2000) { task(0, n); return }
-        val chunk = (n + threads - 1) / threads
-        val jobs = (0 until threads).map { t -> Callable { task(t * chunk, min(n, (t + 1) * chunk)) } }
-        pool.invokeAll(jobs).forEach { it.get() }
+        team.run(n, task)
     }
 
     private fun buildGrid() {
@@ -299,47 +296,6 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
     var iters = 2
     var vecinasCada = 2
 
-    /**
-     * Gauss-Seidel de abajo arriba: las bolas están ordenadas por capas (la rejilla va por y), así que al
-     * recorrerlas en orden cada bola se apoya en las de debajo ya corregidas. Una pasada sostiene toda la
-     * pila (propagación del peso). Cada núcleo se queda con unas columnas (x) para no pisarse.
-     * No cambia la velocidad: solo deshace solapes.
-     */
-    private fun barridoDeAbajoArriba() {
-        val rr = ballR * 2f
-        val rr2 = rr * rr
-        val wallR = radius - ballR
-        val T = if (n < 2000) 1 else threads
-        val jobs = (0 until T).map { t ->
-            Callable {
-                for (i in 0 until n) {
-                    val cx = cellOf[i] % nx
-                    if (T > 1 && cx * T / nx != t) continue
-                    var sx = 0f; var sy = 0f; var sz = 0f
-                    val base = i * MAXV
-                    for (q in 0 until nbrN[i]) {
-                        val j = nbr[base + q]
-                        val ex = x[i] - x[j]; val ey = y[i] - y[j]; val ez = z[i] - z[j]
-                        val d2 = ex * ex + ey * ey + ez * ez
-                        if (d2 < rr2 && d2 > 1e-14f) {
-                            val d = sqrt(d2)
-                            val share = 0.5f + 0.5f * (ey / (rr * 0.5f)).coerceIn(-1f, 1f)
-                            val corr = (rr - d) * share / d
-                            sx += ex * corr; sy += ey * corr; sz += ez * corr
-                        }
-                    }
-                    val m2 = sx * sx + sy * sy + sz * sz
-                    val lim = ballR * 0.5f
-                    if (m2 > lim * lim) { val k = lim / sqrt(m2); sx *= k; sy *= k; sz *= k }
-                    x[i] += sx; y[i] += sy; z[i] += sz
-                    val w2 = x[i] * x[i] + y[i] * y[i] + z[i] * z[i]
-                    if (w2 > wallR * wallR && !inGate(x[i], y[i], z[i])) { val k = wallR / sqrt(w2); x[i] *= k; y[i] *= k; z[i] *= k }
-                }
-            }
-        }
-        if (T == 1) jobs[0].call() else pool.invokeAll(jobs).forEach { it.get() }
-    }
-
     private fun substep(h: Float) {
         if (++steps % 60 == 0) reordenar()
         val damp = if (omega == 0f && targetOmega == 0f) 0.985f else 0.9995f
@@ -380,7 +336,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
         }
         // 2) Estabilización: se deshacen los solapes que ya había SIN tocar la velocidad
         //    (si no, el peso de 30 capas de bolas se convierte en «saltos»)
-        repeat(estab) { barridoDeAbajoArriba() }
+        if (estab > 0) resolver(estab, mover = true)
         // 3) Predicción con la gravedad
         parallel { a, b ->
             for (i in a until b) {
@@ -395,8 +351,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
         val wallR = radius - ballR
         // 3) Velocidades, rebote y rozamiento con la jaula (gira sobre el eje z: pared = ω × r)
         var moving = 0f
-        val partial = FloatArray(threads + 1)
-        val chunk = (n + threads - 1) / max(1, threads)
+        val acum = java.util.concurrent.atomic.DoubleAdder()
         parallel { a, b ->
             var s = 0f
             for (i in a until b) {
@@ -423,9 +378,9 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
                 if (v2 > 36f) { val k = 6f / sqrt(v2); vx[i] *= k; vy[i] *= k; vz[i] *= k }
                 s += v2
             }
-            partial[(a / max(1, chunk)).coerceIn(0, threads)] += s
+            acum.add(s.toDouble())
         }
-        moving = partial.sum()
+        moving = acum.sum().toFloat()
         // Bolas que han caído por la compuerta (de la más baja a la más alta)
         if (gateOpen) {
             val out = ArrayList<Int>()
@@ -443,7 +398,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
         return a
     }
 
-    fun close() { pool.shutdown() }
+    fun close() { team.close() }
 
     fun meanSpeed(): Float {
         if (n == 0) return 0f
@@ -451,4 +406,60 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
         for (k in 0 until n) s += sqrt((vx[k] * vx[k] + vy[k] * vy[k] + vz[k] * vz[k]).toDouble())
         return (s / n).toFloat()
     }
+}
+
+/**
+ * Equipo de hilos para la física: se quedan «calientes» esperando trabajo (sin crear tareas nuevas en
+ * cada paso, que en Android cuesta mucho) y se reparten el trabajo en bloques pequeños: así los núcleos
+ * rápidos y los lentos del móvil terminan a la vez. Si no hay trabajo un rato, se duermen.
+ */
+class Equipo(private val hilos: Int) {
+    @Volatile private var gen = 0
+    @Volatile private var tarea: ((Int, Int) -> Unit)? = null
+    @Volatile private var total = 0
+    @Volatile private var vivo = true
+    private val siguiente = AtomicInteger(0)
+    private val pendientes = AtomicInteger(0)
+    private val bloque = 512
+    private val workers = (1 until hilos).map { k ->
+        Thread({ bucle() }, "bombo3d-$k").apply { isDaemon = true; priority = Thread.MAX_PRIORITY; start() }
+    }
+
+    private fun trabajar() {
+        val t = tarea ?: return
+        val n = total
+        while (true) {
+            val a = siguiente.getAndAdd(bloque)
+            if (a >= n) break
+            t(a, min(n, a + bloque))
+        }
+    }
+
+    private fun bucle() {
+        var visto = 0
+        while (vivo) {
+            var spins = 0
+            while (gen == visto && vivo) {
+                if (++spins < 20_000) Thread.onSpinWait() else LockSupport.parkNanos(200_000)
+            }
+            if (!vivo) return
+            visto = gen
+            trabajar()
+            pendientes.decrementAndGet()
+        }
+    }
+
+    fun run(n: Int, t: (Int, Int) -> Unit) {
+        tarea = t
+        total = n
+        siguiente.set(0)
+        pendientes.set(workers.size)
+        gen++
+        workers.forEach { LockSupport.unpark(it) }
+        trabajar()
+        while (pendientes.get() > 0) Thread.onSpinWait()
+        tarea = null
+    }
+
+    fun close() { vivo = false; workers.forEach { LockSupport.unpark(it) } }
 }

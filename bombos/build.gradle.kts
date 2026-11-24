@@ -12,13 +12,19 @@ android {
         applicationId = "com.bombos.navidad"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+        // Se publica la versión «debug» (misma firma que siempre, para poder actualizar), pero sin modo
+        // depuración: así Android compila la física a código nativo optimizado (varias veces más rápida).
+        debug {
+            isDebuggable = false
+            isJniDebuggable = false
         }
     }
 
