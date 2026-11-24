@@ -710,8 +710,12 @@ object GeoEngine {
     /** Excel del bloque: hoja con los 400.000 números + hojas del informe estadístico. */
     fun exportBlockExcel(id: String, uri: Uri) {
         scope.launch(Dispatchers.IO) {
-            _state.update { it.copy(block = BlockProgress(0, 1, System.currentTimeMillis(), "Exportando a Excel")) }
             val rep = BlockStore.list(app).firstOrNull { it.id == id }
+            val total = rep?.n ?: 0
+            _state.update { it.copy(block = BlockProgress(0, total.coerceAtLeast(1), System.currentTimeMillis(), "Exportando a Excel")) }
+            // Servicio en primer plano: si no, Android puede cerrar la app a mitad y el Excel queda cortado
+            GeneratorService.start(app)
+            var rowsDone = 0
             val r = runCatching {
                 app.contentResolver.openOutputStream(uri)?.use { out ->
                     val sheets = ArrayList<Xlsx.Sheet>()
@@ -719,7 +723,11 @@ object GeoEngine {
                         BlockStore.openReader(BlockStore.dataFile(app, id).inputStream()).use { rd ->
                             rd.lineSequence().filter { !it.startsWith("#") }.forEachIndexed { i, line ->
                                 val p = line.split(";")
-                                if (i == 0) emit(p)
+                                if (i % 5000 == 0) _state.update { it.copy(block = it.block?.copy(done = i)) }
+                                rowsDone = i
+                                if (i == 0) emit(listOf<Any?>("Número", "Latitud", "Longitud", "Ciudad", "Comunidad", "Habitantes",
+                                    "Distancia (km)", "Radio (km)", "En núcleo", "Hash solar", "Palabra", "Fecha del evento",
+                                    "Evento histórico", "Wikipedia", "Euromillón", "Aciertos máx. en el histórico", "Sorteo (si > 4 aciertos)"))
                                 else emit(listOf<Any?>(p[0], p.getOrNull(1)?.toDoubleOrNull(), p.getOrNull(2)?.toDoubleOrNull(),
                                     p.getOrNull(3), p.getOrNull(4), p.getOrNull(5)?.toIntOrNull(), p.getOrNull(6)?.toDoubleOrNull(),
                                     p.getOrNull(7)?.toDoubleOrNull(), p.getOrNull(8), p.getOrNull(9),
@@ -734,9 +742,14 @@ object GeoEngine {
                     Xlsx.write(out, sheets)
                 } ?: error("no se pudo abrir")
             }
+            if (r.isFailure) runCatching { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) }
             _state.update {
-                it.copy(block = null, message = r.fold({ "Bloque exportado a Excel." }, { e -> "Error al exportar: ${e.message}" }))
+                it.copy(block = null, message = r.fold(
+                    { "Excel terminado: ${thousandsStr(rowsDone)} números. Ya puedes abrirlo o compartirlo." },
+                    { e -> "Error al exportar (se ha borrado el Excel incompleto): ${e.message}" },
+                ))
             }
+            if (!_state.value.running && _state.value.block == null) GeneratorService.stop(app)
         }
     }
 
@@ -1160,3 +1173,5 @@ class SearchQuery(raw: String) {
 
 private fun r5(x: Double) = Math.round(x * 100000) / 100000.0
 private fun r3(x: Double) = Math.round(x * 1000) / 1000.0
+
+private fun thousandsStr(n: Int): String = "%,d".format(Locale.forLanguageTag("es-ES"), n)

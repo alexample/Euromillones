@@ -372,7 +372,8 @@ fun BlockReportScreen(r: BlockReport, modifier: Modifier = Modifier) {
                 Section("Combinaciones de Euromillones")
                 Text(
                     "Cada número lleva una combinación cruzada con ${n0(r.euroDraws)} sorteos reales. " +
-                        "Lo esperado es la probabilidad de llegar a esos aciertos en algún sorteo. Anómalo si |z| > ${d2(r.euroCrit)}.",
+                        "Lo esperado es la probabilidad de llegar a esos aciertos en algún sorteo, teniendo en cuenta que hasta 2011 " +
+                        "solo había 9 estrellas y hasta 2016, 11. Anómalo si |z| > ${d2(r.euroCrit)}.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

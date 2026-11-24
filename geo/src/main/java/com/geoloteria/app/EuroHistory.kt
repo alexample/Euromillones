@@ -75,6 +75,44 @@ object EuroHistory {
         if (out.isNotEmpty()) draws = out.sortedByDescending { it.date }.toTypedArray()
     }
 
+    @Volatile private var pCache: Pair<Array<D>, DoubleArray>? = null
+
+    /**
+     * Probabilidad de que una combinación al azar llegue a [k] aciertos o más en ALGÚN sorteo real.
+     * Usa las estrellas reales de cada sorteo: hasta mayo de 2011 solo había 9 estrellas y hasta
+     * septiembre de 2016, 11. Por eso las combinaciones con estrellas 10, 11 o 12 aciertan menos
+     * en los sorteos antiguos, y suponer 12 estrellas en todos daba un falso «déficit».
+     */
+    fun pAtLeast(k: Int): Double {
+        val ds = draws
+        if (ds.isEmpty()) return 0.0
+        val c = pCache
+        val table = if (c != null && c.first === ds) c.second else {
+            fun comb(n: Int, r: Int): Double { var x = 1.0; for (i in 1..r) x = x * (n - r + i) / i; return x }
+            val h = DoubleArray(6) { a -> comb(5, a) * comb(45, 5 - a) / comb(50, 5) }   // aciertos en números
+            val t = DoubleArray(9)
+            for (kk in 0..8) {
+                var tot = 0.0
+                for (s1 in 1..12) for (s2 in s1 + 1..12) {
+                    val m = (1 shl s1) or (1 shl s2)
+                    var lt = 1.0
+                    for (d in ds) {
+                        val b = Integer.bitCount(m and d.stars)
+                        var q = 0.0
+                        for (a in 0..5) if (a + b < kk) q += h[a]
+                        lt *= q
+                        if (lt == 0.0) break
+                    }
+                    tot += 1 - lt
+                }
+                t[kk] = tot / 66
+            }
+            pCache = ds to t
+            t
+        }
+        return table[k.coerceIn(0, 8)]
+    }
+
     /** Combinación al azar: 5 números distintos (1-50) y 2 estrellas (1-12), ordenados. */
     fun randomCombo(rnd: Random): Pair<List<Int>, List<Int>> {
         val nums = (1..50).toMutableList()

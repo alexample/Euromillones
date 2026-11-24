@@ -356,7 +356,7 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
         val euroCrit = Stats.zCrit(3)
         val euroRows = if (euroN == 0 || draws == 0) emptyList() else (5..7).map { k ->
             val c = (k..7).sumOf { euroMax[it] }
-            val p = 1 - (1 - pDraw(k)).pow(draws)
+            val p = EuroHistory.pAtLeast(k).takeIf { it > 0 } ?: (1 - (1 - pDraw(k)).pow(draws))
             val e = euroN * p
             val z = (c - e) / sqrt(euroN * p * (1 - p)).coerceAtLeast(1e-9)
             StatRow("$k o más aciertos", if (k == 7) "5 números + 2 estrellas" else "", c, e, z, abs(z) > euroCrit)
