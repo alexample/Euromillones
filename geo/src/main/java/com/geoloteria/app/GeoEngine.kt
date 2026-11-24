@@ -57,6 +57,13 @@ data class GeoState(
     // Euromillones completos (5 números + 2 estrellas) en el automático y en los bloques
     val euroFull: Long = 0,
     val euroFullBlocks: Long = 0,
+    // Azar, dinero y lotería
+    val eventsOn: Boolean = false,
+    val notifyTheme: Boolean = false,
+    val notifyLotto: Boolean = false,
+    val themeCount: Long = 0,
+    val lottoCount: Long = 0,
+    val doubleCount: Long = 0,
 )
 
 /** Progreso del bloque en curso. */
@@ -133,6 +140,9 @@ object GeoEngine {
                 watchNumbers = prefs.getString("avisos_numeros", "").orEmpty().split("|").filter { x -> x.isNotBlank() },
                 watchTowns = prefs.getString("avisos_poblaciones", "").orEmpty().split("|").filter { x -> x.isNotBlank() },
                 stopOnAlert = prefs.getBoolean("avisos_parar", false),
+                eventsOn = prefs.getBoolean("eventos", false).also { e -> Words.eventsOn = e },
+                notifyTheme = prefs.getBoolean("avisar_tema", false),
+                notifyLotto = prefs.getBoolean("avisar_loteria", false),
                 mode = runCatching { GenMode.valueOf(prefs.getString("modo", null) ?: "") }.getOrDefault(GenMode.CIUDADES),
                 pick = runCatching { CityPick.valueOf(prefs.getString("eleccion", null) ?: "") }.getOrDefault(CityPick.POBLACION),
             )
@@ -146,6 +156,8 @@ object GeoEngine {
             val g = Geo(app)
             runCatching { Words.load(app) }
             runCatching { Events.load(app) }
+            runCatching { Themes.load(app) }
+            runCatching { Loterias.load(app) }
             runCatching { EuroHistory.start(app) }
             geo = g
             load(g)
@@ -259,10 +271,14 @@ object GeoEngine {
                 hitCount = s.hitCount + if (d.isHit) 1 else 0,
                 historySize = s.total + 1,
                 euroFull = s.euroFull + if (d.euroHits >= 7) 1 else 0,
+                themeCount = s.themeCount + if (d.theme != null) 1 else 0,
+                lottoCount = s.lottoCount + if (d.lotto.isNotEmpty()) 1 else 0,
+                doubleCount = s.doubleCount + if (d.theme != null && d.lotto.isNotEmpty()) 1 else 0,
             )
         }
         dirty = true
         if (d.euroHits >= 7) euroJackpot(d, inBlock = false)
+        luckCheck(d)
         if (d.isHit) {
             vibrate()
             if (_state.value.stopOnHit) stop()
@@ -284,6 +300,29 @@ object GeoEngine {
         }
         return null
     }
+
+    /**
+     * Azar, dinero y lotería: si el número coincide con un premio de Navidad/Niño y además su palabra es de
+     * azar o dinero (doble coincidencia) se avisa siempre; cada cosa por separado solo si está activado.
+     */
+    private fun luckCheck(d: Draw) {
+        val t = d.theme
+        val l = d.lotto
+        val s = _state.value
+        val reason = when {
+            t != null && l.isNotEmpty() -> "🎯 Doble: «${d.word}» ${Themes.icon(t)} y 🎄 $l"
+            l.isNotEmpty() && s.notifyLotto -> "🎄 Premiado: $l"
+            t != null && s.notifyTheme -> "${Themes.icon(t)} Palabra de ${Themes.label(t)}: «${d.word}»"
+            else -> return
+        }
+        _state.update { it.copy(alerts = (listOf(Alert(d, reason, LocalDateTime.now())) + it.alerts).take(ALERTS_MAX)) }
+        dirty = true
+        notifyAlert(d, reason)
+    }
+
+    fun setEventsOn(v: Boolean) { Words.eventsOn = v; _state.update { it.copy(eventsOn = v) }; saveWatch() }
+    fun setNotifyTheme(v: Boolean) { _state.update { it.copy(notifyTheme = v) }; saveWatch() }
+    fun setNotifyLotto(v: Boolean) { _state.update { it.copy(notifyLotto = v) }; saveWatch() }
 
     /** ¡Euromillón completo! Aviso siempre, sin necesidad de filtro. */
     private fun euroJackpot(d: Draw, inBlock: Boolean) {
@@ -341,6 +380,9 @@ object GeoEngine {
             .putString("avisos_numeros", s.watchNumbers.joinToString("|"))
             .putString("avisos_poblaciones", s.watchTowns.joinToString("|"))
             .putBoolean("avisos_parar", s.stopOnAlert)
+            .putBoolean("eventos", s.eventsOn)
+            .putBoolean("avisar_tema", s.notifyTheme)
+            .putBoolean("avisar_loteria", s.notifyLotto)
             .apply()
     }
 
@@ -589,6 +631,7 @@ object GeoEngine {
             r.anomalousWords.firstOrNull()?.let { add("la palabra «${it.label}» ${it.count} veces") }
             r.anomalousDates.firstOrNull()?.let { add("el evento «${it.label.take(60)}» ${it.count} veces") }
             r.yearRows.firstOrNull { it.anomalous }?.let { add(it.label) }
+            r.luckRows.firstOrNull { it.anomalous }?.let { add("${it.label} ${it.count} veces (esperado ${Math.round(it.expected)})") }
             r.euroRows.firstOrNull { it.anomalous }?.let { add("Euromillones: ${it.label} ${it.count} veces (esperado ${Math.round(it.expected)})") }
             r.monthRows.firstOrNull { it.anomalous }?.let { add(it.label) }
             r.weekdayRows.firstOrNull { it.anomalous }?.let { add("los ${it.label}") }
@@ -727,14 +770,16 @@ object GeoEngine {
                                 rowsDone = i
                                 if (i == 0) emit(listOf<Any?>("Número", "Latitud", "Longitud", "Ciudad", "Comunidad", "Habitantes",
                                     "Distancia (km)", "Radio (km)", "En núcleo", "Hash solar", "Palabra", "Fecha del evento",
-                                    "Evento histórico", "Wikipedia", "Euromillón", "Aciertos máx. en el histórico", "Sorteo (si > 4 aciertos)"))
+                                    "Evento histórico", "Wikipedia", "Euromillón", "Aciertos máx. en el histórico", "Sorteo (si > 4 aciertos)",
+                                    "Tema de la palabra", "Premio de Navidad / Niño"))
                                 else emit(listOf<Any?>(p[0], p.getOrNull(1)?.toDoubleOrNull(), p.getOrNull(2)?.toDoubleOrNull(),
                                     p.getOrNull(3), p.getOrNull(4), p.getOrNull(5)?.toIntOrNull(), p.getOrNull(6)?.toDoubleOrNull(),
                                     p.getOrNull(7)?.toDoubleOrNull(), p.getOrNull(8), p.getOrNull(9),
                                     p.getOrNull(10), p.getOrNull(11)?.let { Words.show(it) },
                                     p.getOrNull(12)?.toIntOrNull()?.let { Events.get(it)?.text },
                                     p.getOrNull(12)?.toIntOrNull()?.let { Events.get(it)?.url },
-                                    p.getOrNull(13), p.getOrNull(14)?.toIntOrNull(), p.getOrNull(15)))
+                                    p.getOrNull(13), p.getOrNull(14)?.toIntOrNull(), p.getOrNull(15),
+                                    Themes.label(p.getOrNull(10)?.let { Themes.of(it) }), Loterias.info(p[0])))
                             }
                         }
                     }
@@ -781,6 +826,7 @@ object GeoEngine {
             Xlsx.sheet("Mes del evento", rows(r.monthRows)),
             Xlsx.sheet("Tipo de evento", rows(r.weekdayRows)),
             Xlsx.sheet("Euromillones", rows(r.euroRows)),
+            Xlsx.sheet("Azar, dinero y lotería", rows(r.luckRows)),
         )
     }
 
@@ -1024,6 +1070,9 @@ object GeoEngine {
                 hitCount = db.count(hitsOnly = true),
                 historySize = total,
                 euroFull = db.countEuro(7),
+                themeCount = db.countQuery("#tema"),
+                lottoCount = db.countQuery("#premiado"),
+                doubleCount = db.countQuery("#doble"),
                 euroFullBlocks = app.getSharedPreferences("geoloteria", Context.MODE_PRIVATE).getLong("completos_bloques", 0),
             )
         }
@@ -1041,13 +1090,15 @@ object GeoEngine {
             val s = _state.value
             val header = listOf("Número", "Palabra", "Evento histórico", "Fecha del evento", "Wikipedia", "Latitud", "Longitud",
                 "En núcleo", "Ciudad", "Comunidad", "Habitantes", "Distancia (km)", "Radio (km)", "Generado el",
-                "Euromillón", "Aciertos máx. en el histórico", "Sorteo (si > 4 aciertos)")
+                "Euromillón", "Aciertos máx. en el histórico", "Sorteo (si > 4 aciertos)",
+                "Tema de la palabra", "Premio de Navidad / Niño")
             fun row(d: Draw, ts: Long): List<Any?> {
                 val e = Events.get(d.event)
                 return listOf(
                     d.number, d.word, e?.text, Words.show(d.date), e?.url, d.lat, d.lon, if (d.isHit) "Sí" else "No",
                     d.nearest.name, d.nearest.region, d.nearest.population, round2(d.distanceKm), round2(d.radiusKm),
                     toTime(ts).format(TIME), d.euro, d.euroHits.takeIf { it >= 0 }, d.euroInfo,
+                    Themes.label(d.theme), d.lotto,
                 )
             }
             val max = Xlsx.MAX_ROWS - 1

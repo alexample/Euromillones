@@ -366,6 +366,28 @@ fun BlockReportScreen(r: BlockReport, modifier: Modifier = Modifier) {
             items(r.yearRows, key = { "y-" + it.label }) { x -> CityLine(x) }
         }
 
+        // ---- Azar, dinero y lotería ----
+        if (r.luckRows.isNotEmpty()) {
+            item {
+                Section("Azar, dinero y lotería")
+                Text(
+                    "Palabras de azar y de dinero, y números que ya fueron 1º, 2º, 3º o 4º premio de Navidad o del Niño. " +
+                        "Anómalo si |z| > ${d2(r.luckCrit)}.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            items(r.luckRows, key = { "lk-" + it.label }) { x -> CityLine(x) }
+            if (r.lottoList.isNotEmpty()) {
+                item {
+                    Text("🎄 Coinciden con un premio (${r.lottoList.size}${if (r.lottoList.size >= 300) "+" else ""})",
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                }
+                items(r.lottoList.size, key = { "lt-$it" }) { i ->
+                    Text(r.lottoList[i], style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
         // ---- Euromillones ----
         if (r.euroN > 0) {
             item {

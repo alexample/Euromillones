@@ -93,12 +93,16 @@ data class BlockReport(
     val euroRows: List<StatRow> = emptyList(),
     val euroCrit: Double = 0.0,
     val euroFull: List<String> = emptyList(),   // "número · combinación · sorteo" de los completos
+    // Azar, dinero y premios de Navidad/Niño
+    val luckRows: List<StatRow> = emptyList(),
+    val luckCrit: Double = 0.0,
+    val lottoList: List<String> = emptyList(),   // "número · palabra · premio" de los que coinciden
 ) {
     val anomalies: Int
         get() = anomalousNumbers.size + digitRows.count { it.anomalous } + cityRows.count { it.anomalous } +
             regionRows.count { it.anomalous } + (if (abs(chi2Z) > 3.3) 1 else 0) + (if (abs(zerosZ) > 3.3) 1 else 0) +
             anomalousWords.size + anomalousDates.size + yearRows.count { it.anomalous } + monthRows.count { it.anomalous } +
-            weekdayRows.count { it.anomalous } + euroRows.count { it.anomalous } + (if (wordN > 0 && abs(wordChi2Z) > 3.3) 1 else 0) +
+            weekdayRows.count { it.anomalous } + euroRows.count { it.anomalous } + luckRows.count { it.anomalous } + (if (wordN > 0 && abs(wordChi2Z) > 3.3) 1 else 0) +
             (if (dateN > 0 && abs(dateChi2Z) > 3.3) 1 else 0)
 }
 
@@ -167,10 +171,24 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
     var dateN = 0
     var euroN = 0
     val euroMax = IntArray(8)
-    val euroFull = ArrayList<String>()   // cuántas combinaciones tuvieron como máximo 0…7 aciertos
+    val euroFull = ArrayList<String>()
+    var azarN = 0
+    var dineroN = 0
+    var lottoN = 0
+    var doubleN = 0
+    var wordTotal = 0
+    val lottoList = ArrayList<String>()   // cuántas combinaciones tuvieron como máximo 0…7 aciertos
 
     fun add(number: String, nucIndex: Int, seedHex: String, seedTime: String?, word: String = "", event: Int = -1, euroHits: Int = -1) {
         if (euroHits in 0..7) { euroMax[euroHits]++; euroN++ }
+        val th = if (word.isNotEmpty()) Themes.of(word) else null
+        if (word.isNotEmpty()) wordTotal++
+        if (th == Themes.AZAR) azarN++ else if (th == Themes.DINERO) dineroN++
+        if (Loterias.isPrized(number)) {
+            lottoN++
+            if (th != null) doubleN++
+            if (lottoList.size < 300) lottoList += "$number · «$word»${Themes.icon(th).let { if (it.isEmpty()) "" else " $it" }} · ${Loterias.info(number)}"
+        }
         if (word.isNotEmpty()) {
             val wi = Words.index(word)
             if (wi in words.indices) { words[wi]++; wordN++ }
@@ -362,7 +380,25 @@ class BlockCounter(private val nucleos: List<Nucleo>) {
             StatRow("$k o más aciertos", if (k == 7) "5 números + 2 estrellas" else "", c, e, z, abs(z) > euroCrit)
         }
 
+        // ---- Azar, dinero y lotería ----
+        val luckCrit = Stats.zCrit(4)
+        fun row(label: String, detail: String, c: Int, n: Int, p: Double): StatRow {
+            val e = n * p
+            val z = (c - e) / sqrt(n * p * (1 - p)).coerceAtLeast(1e-9)
+            return StatRow(label, detail, c, e, z, abs(z) > luckCrit)
+        }
+        val ws = Words.size.coerceAtLeast(1).toDouble()
+        val pl = Loterias.distinct / 100_000.0
+        val pt = (Themes.count(Themes.AZAR) + Themes.count(Themes.DINERO)) / ws
+        val luckRows = if (n == 0) emptyList() else listOfNotNull(
+            if (wordTotal > 0) row("Palabras de azar y suerte 🍀", "${Themes.count(Themes.AZAR)} palabras posibles", azarN, wordTotal, Themes.count(Themes.AZAR) / ws) else null,
+            if (wordTotal > 0) row("Palabras de dinero 💰", "${Themes.count(Themes.DINERO)} palabras posibles", dineroN, wordTotal, Themes.count(Themes.DINERO) / ws) else null,
+            row("Premiados en Navidad o el Niño 🎄", "${Loterias.distinct} números premiados", lottoN, n, pl),
+            if (wordTotal > 0) row("Doble: premiado + palabra de azar o dinero 🎯", "", doubleN, n, pl * pt) else null,
+        )
+
         return BlockReport(
+            luckRows = luckRows, luckCrit = luckCrit, lottoList = lottoList,
             euroN = euroN, euroDraws = draws, euroRows = euroRows, euroCrit = euroCrit, euroFull = euroFull.take(200),
             wordN = wordN, wordDistinct = words.count { it > 0 }, wordTotal = wTotal, wordLambda = wLam,
             wordThreshold = wk, wordChi2Z = wChiZ, anomalousWords = anomalousWords, topWords = topWords,
@@ -473,6 +509,7 @@ object BlockStore {
         .put("weekdays", rowsToJson(r.weekdayRows)).put("weekdayCrit", r.weekdayCrit)
         .put("euroN", r.euroN).put("euroDraws", r.euroDraws).put("euro", rowsToJson(r.euroRows)).put("euroCrit", r.euroCrit)
         .put("euroFull", org.json.JSONArray(r.euroFull))
+        .put("luck", rowsToJson(r.luckRows)).put("luckCrit", r.luckCrit).put("lottoList", org.json.JSONArray(r.lottoList))
 
     fun fromJson(o: JSONObject): BlockReport {
         val seeds = o.optJSONArray("seeds")
@@ -507,6 +544,8 @@ object BlockStore {
             euroN = o.optInt("euroN"), euroDraws = o.optInt("euroDraws"), euroRows = rowsFromJson(o.optJSONArray("euro")),
             euroCrit = o.optDouble("euroCrit", 0.0),
             euroFull = o.optJSONArray("euroFull")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
+            luckRows = rowsFromJson(o.optJSONArray("luck")), luckCrit = o.optDouble("luckCrit", 0.0),
+            lottoList = o.optJSONArray("lottoList")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
         )
     }
 }

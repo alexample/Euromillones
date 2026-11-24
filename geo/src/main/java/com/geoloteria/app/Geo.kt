@@ -50,6 +50,11 @@ data class Draw(
     val euroHits: Int = -1,  // máximo de aciertos (números + estrellas) en el histórico
     val euroInfo: String = "", // solo si hay más de cuatro aciertos: cuántos y en qué sorteo(s)
 ) {
+    /** Premio de Navidad o del Niño con el mismo número ("" si ninguno). Se calcula, no se guarda. */
+    val lotto: String get() = Loterias.info(number)
+    /** Tema de la palabra: "azar", "dinero" o null. */
+    val theme: String? get() = Themes.of(word)
+
     val isHit: Boolean get() = radiusKm > 0 && distanceKm <= radiusKm
 }
 

@@ -40,6 +40,9 @@ object Words {
         indexOf = HashMap<String, Int>(words.size * 2).also { m -> words.forEachIndexed { i, w -> m[w] = i } }
     }
 
+    /** Eventos históricos activados (por defecto no). */
+    @Volatile var eventsOn: Boolean = false
+
     fun word(rnd: Random): String = if (words.isEmpty()) "" else words[rnd.nextInt(words.size)]
 
     /** Fecha al azar (todos los días con la misma probabilidad), en formato ISO aaaa-mm-dd. */
@@ -48,7 +51,7 @@ object Words {
     /** Añade palabra y evento histórico (con su fecha) a un número recién generado. */
     fun decorate(d: Draw, rnd: Random): Draw {
         val w = word(rnd)
-        val e = Events.random(rnd)
+        val e = if (eventsOn) Events.random(rnd) else -1
         // Combinación de Euromillones con el mismo azar, cruzada con todos los sorteos reales
         val (nums, stars) = EuroHistory.randomCombo(rnd)
         val m = EuroHistory.best(nums, stars)
@@ -57,7 +60,7 @@ object Words {
                 m.draws.joinToString(", ") { (id, date) -> "el sorteo nº $id del ${Events.showDate(date)}" }
         } else ""
         return d.copy(
-            word = w, event = e, date = Events.dateOf(e),
+            word = w, event = e, date = if (e >= 0) Events.dateOf(e) else "",
             euro = EuroHistory.format(nums, stars), euroHits = m?.hits ?: -1, euroInfo = info,
         )
     }

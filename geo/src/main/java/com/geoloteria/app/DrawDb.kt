@@ -102,6 +102,12 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
         readableDatabase.rawQuery("SELECT COUNT(*) FROM draws WHERE euro_hits >= $k", null)
             .use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }
 
+    /** Cuántos números guardados cumplen una búsqueda (para los contadores de la pantalla). */
+    fun countQuery(query: String): Long {
+        val (w, a) = where(query, false)
+        return readableDatabase.rawQuery("SELECT COUNT(*) FROM draws$w", a).use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }
+    }
+
     fun maxId(): Long =
         readableDatabase.rawQuery("SELECT IFNULL(MAX(id), 0) FROM draws", null)
             .use { c -> if (c.moveToFirst()) c.getLong(0) else 0 }
@@ -120,8 +126,25 @@ class DrawDb(context: Context) : SQLiteOpenHelper(context, "geoloteria.db", null
             ?: Regex("""a[nñ]o\s*(\d{4})""").matchEntire(q.lowercase())
         val ev = Regex("""evento\s*(\d+)""").matchEntire(q.lowercase())
         val ac = Regex("""(\d)\s*aciertos?""").matchEntire(q.lowercase())
+        val tag = if (q.startsWith("#")) norm(q.drop(1)) else null
+        fun inList(col: String, values: Collection<String>) {
+            if (values.isEmpty()) { parts += "0"; return }
+            parts += "$col IN (" + values.joinToString(",") { "?" } + ")"
+            args += values
+        }
         if (q.isNotEmpty()) {
-            if (ac != null) {
+            if (tag != null) {
+                when {
+                    tag.startsWith("azar") || tag.startsWith("suerte") -> inList("word", Themes.words(Themes.AZAR))
+                    tag.startsWith("dinero") -> inList("word", Themes.words(Themes.DINERO))
+                    tag.startsWith("tema") -> inList("word", Themes.words(null))
+                    tag.startsWith("navidad") -> inList("number", Loterias.numbers.filter { "Navidad" in Loterias.info(it) })
+                    tag.startsWith("nino") -> inList("number", Loterias.numbers.filter { "Niño" in Loterias.info(it) })
+                    tag.startsWith("premi") || tag.startsWith("loter") -> inList("number", Loterias.numbers)
+                    tag.startsWith("doble") -> { inList("word", Themes.words(null)); inList("number", Loterias.numbers) }
+                    else -> parts += "0"
+                }
+            } else if (ac != null) {
                 parts += "euro_hits >= ?"
                 args += ac.groupValues[1]
             } else if (ev != null) {

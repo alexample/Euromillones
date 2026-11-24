@@ -539,6 +539,37 @@ fun App(vm: GeoViewModel = viewModel()) {
                         Stat("Tasa", if (s.total > 0) pct(s.hitCount.toDouble() / s.total) else "–")
                     }
                 }
+                // Azar, dinero y lotería
+                Card(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("Azar, dinero y lotería", fontWeight = FontWeight.Bold)
+                        Text("🍀💰 Palabras de azar o dinero: ${thousands(s.themeCount)}",
+                            modifier = Modifier.fillMaxWidth().clickable { query = "#tema" }.padding(vertical = 3.dp))
+                        Text("🎄 Coinciden con un premio de Navidad o del Niño: ${thousands(s.lottoCount)}",
+                            modifier = Modifier.fillMaxWidth().clickable { query = "#premiado" }.padding(vertical = 3.dp))
+                        Text("🎯 Las dos cosas a la vez: ${thousands(s.doubleCount)}", fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.fillMaxWidth().clickable { query = "#doble" }.padding(vertical = 3.dp))
+                        Text(
+                            "Toca una línea para verlos. Por azar: 1 de cada 60 palabras es de azar o dinero, " +
+                                "1 de cada ${if (Loterias.distinct > 0) 100_000 / Loterias.distinct else 430} números coincide con un premio " +
+                                "y la doble coincidencia sale 1 vez cada ~26.000. Premios: 1º a 4º desde ${Loterias.desdeCompleto}, y Gordos de Navidad desde 1920.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = s.notifyTheme, onCheckedChange = vm::setNotifyTheme)
+                            Text("  Avisarme de cada palabra de azar o dinero", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = s.notifyLotto, onCheckedChange = vm::setNotifyLotto)
+                            Text("  Avisarme de cada número premiado", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text("La doble coincidencia avisa siempre.", style = MaterialTheme.typography.labelSmall)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = s.eventsOn, onCheckedChange = vm::setEventsOn)
+                            Text("  Eventos históricos de Wikipedia", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
                 // Euromillones completos: siempre a la vista
                 Card(
                     Modifier.fillMaxWidth().padding(top = 6.dp).clickable { query = "7 aciertos" },
@@ -589,8 +620,8 @@ fun App(vm: GeoViewModel = viewModel()) {
                             IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Clear, contentDescription = "Borrar búsqueda") }
                         }
                     },
-                    label = { Text("Buscar número, ciudad, palabra o fecha del evento") },
-                    placeholder = { Text("48213, Toledo, casa, año 1492, 5 aciertos…") },
+                    label = { Text("Buscar número, ciudad, palabra, #azar, #dinero, #premiado, #doble") },
+                    placeholder = { Text("48213, Toledo, #dinero, #premiado, 5 aciertos…") },
                 )
                 if (query.isNotBlank()) {
                     Text(
@@ -930,9 +961,17 @@ private fun num2(x: Double) = String.format(es, "%.2f", x)
 private fun WordDate(d: Draw, style: androidx.compose.ui.text.TextStyle, full: Boolean = false) {
     val ctx = LocalContext.current
     if (d.word.isNotEmpty()) {
-        Text("«${d.word}»", style = style, fontWeight = FontWeight.SemiBold, color = Teal)
+        val t = d.theme
+        Text(
+            "«${d.word}»" + if (t != null) "  ${Themes.icon(t)} ${Themes.label(t)}" else "",
+            style = style, fontWeight = if (t != null) FontWeight.Bold else FontWeight.SemiBold,
+            color = if (t != null) Color(0xFFB45309) else Teal,
+        )
     }
-    val e = Events.get(d.event)
+    if (d.lotto.isNotEmpty()) {
+        Text("🎄 Premiado: ${d.lotto}", style = style, color = Color(0xFFB91C1C), fontWeight = FontWeight.Bold)
+    }
+    val e = if (Words.eventsOn) Events.get(d.event) else null
     if (e != null) {
         val text = if (full || e.text.length <= 120) e.text else e.text.take(118) + "…"
         Text(
@@ -942,7 +981,7 @@ private fun WordDate(d: Draw, style: androidx.compose.ui.text.TextStyle, full: B
             textDecoration = TextDecoration.Underline,
             modifier = Modifier.clickable { WikiNav.url = e.url },
         )
-    } else if (d.date.isNotEmpty()) {
+    } else if (d.date.isNotEmpty() && Words.eventsOn) {
         Text(Words.show(d.date), style = style, color = Teal)
     }
     if (d.euro.isNotEmpty()) {
