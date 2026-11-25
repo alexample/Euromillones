@@ -15,7 +15,7 @@ import java.net.URL
 /** Todo lo que la app sabe: histórico de quinielas, ligas, equipos y próximas jornadas. */
 class Base(
     val quinielas: List<Quiniela>, val ligas: List<Liga>, val proximas: List<Prox>, val actualizado: String,
-    mapa: Map<String, String>,
+    mapa: Map<String, String>, val plantillas: Plantillas,
 ) {
     val estadistica = Estadistica(quinielas)
     val tendencias = Tendencias(ligas)
@@ -28,7 +28,7 @@ class Base(
  */
 object Datos {
     private const val URL_BASE = "https://raw.githubusercontent.com/alexample/Euromillones/main/data/"
-    private val FICHEROS = listOf("quinielas.json", "ligas.json", "equipos.json", "jornada.json")
+    private val FICHEROS = listOf("quinielas.json", "ligas.json", "equipos.json", "jornada.json", "plantillas.json")
 
     private val _base = MutableStateFlow<Base?>(null)
     val base: StateFlow<Base?> = _base.asStateFlow()
@@ -79,7 +79,16 @@ object Datos {
                         })
                 }
             }
-            Base(q, l, prox, j.optString("actualizado"), eq)
+            val pl = runCatching { JSONObject(leer("plantillas.json")) }.getOrNull()?.let { o ->
+                o.keys().asSequence().map { k ->
+                    val t = o.getJSONObject(k); val js = t.getJSONArray("jugadores")
+                    Plantilla(k, t.optInt("liga"), List(js.length()) { i ->
+                        val x = js.getJSONObject(i)
+                        Jugador(x.optString("n"), java.time.LocalDate.parse(x.getString("f")), x.optInt("t"), x.optInt("a"), x.optString("p"))
+                    })
+                }.toList()
+            }.orEmpty()
+            Base(q, l, prox, j.optString("actualizado"), eq, Plantillas(pl))
         }
         b.onSuccess { _base.value = it }.onFailure { _estado.value = "Error leyendo los datos: ${it.message}" }
     }

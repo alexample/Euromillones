@@ -90,7 +90,10 @@ private class Sel {
     var mascaras by mutableStateOf<Set<Mascara>?>(null)
     var racha by mutableIntStateOf(0)
     var tope by mutableIntStateOf(100)
-    var modo by mutableStateOf(Generador.Modo.PROBABLES)
+    var modo by mutableStateOf(Generador.Modo.POR_MASCARA)
+    var porMascara by mutableIntStateOf(3)
+    var bio by mutableStateOf(false)
+    var bioUmbral by mutableFloatStateOf(0.3f)
     var resultado by mutableStateOf<Generacion?>(null)
 }
 
@@ -143,6 +146,25 @@ private fun pronosticos(b: Base, p: Prox, k: Int): List<Pronostico> = p.partidos
     b.tendencias.pronostico(b.equipos.deLiga(x.local), b.equipos.deLiga(x.visit), f, k)
 }
 
+/** Biorritmo medio de los titulares de los dos equipos para el día del partido (solo equipos españoles). */
+private fun biorritmos(b: Base, p: Prox): List<Pair<Bio?, Bio?>> = p.partidos.map { x ->
+    val dia = runCatching { java.time.LocalDate.parse(x.fecha.take(10).ifEmpty { p.fecha }) }.getOrDefault(java.time.LocalDate.parse(p.fecha))
+    b.plantillas.de(x.local)?.let { Biorritmo.equipo(it, dia) } to b.plantillas.de(x.visit)?.let { Biorritmo.equipo(it, dia) }
+}
+
+/** Filtro biorritmo: si un equipo está claramente por debajo del otro, se quita el signo que le da la victoria. */
+private fun conBiorritmo(perm: IntArray, bios: List<Pair<Bio?, Bio?>>, umbral: Float): IntArray = IntArray(14) { i ->
+    val (l, v) = bios.getOrNull(i) ?: return@IntArray perm[i]
+    if (l == null || v == null) return@IntArray perm[i]
+    val d = l.media - v.media
+    var m = perm[i]
+    if (d >= umbral) m = m and (1 shl 2).inv()        // el visitante está «bajo»: fuera el 2
+    else if (d <= -umbral) m = m and 1.inv()           // el local está «bajo»: fuera el 1
+    if (m == 0) perm[i] else m
+}
+
+private fun bioTxt(x: Bio?) = if (x == null) "sin plantilla" else "%+.2f".format(x.media)
+
 private fun autoPermitidos(pr: List<Pronostico>, umbral: Float): IntArray = IntArray(14) { i ->
     val p = pr.getOrNull(i)?.p ?: return@IntArray 7
     var m = 0
@@ -151,7 +173,7 @@ private fun autoPermitidos(pr: List<Pronostico>, umbral: Float): IntArray = IntA
     m
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base, sel: Sel, prox: Prox, pr: List<Pronostico>) {
+private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base, sel: Sel, prox: Prox, pr: List<Pronostico>, bios: List<Pair<Bio?, Bio?>>) {
         item {
             Text("Jornada", fontWeight = FontWeight.Bold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -194,6 +216,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
                             style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                         Text("1 ${pct(p.p[0])} · X ${pct(p.p[1])} · 2 ${pct(p.p[2])}   (${p.nota}; casos ${p.nLocal}/${p.nVisit})",
                             style = MaterialTheme.typography.bodySmall)
+                        val bio = bios.getOrNull(i)
+                        if (bio != null && (bio.first != null || bio.second != null)) Text(
+                            "Biorritmo: local ${bioTxt(bio.first)} · visitante ${bioTxt(bio.second)}" +
+                                if (sel.bio && bio.first != null && bio.second != null && kotlin.math.abs(bio.first!!.media - bio.second!!.media) >= sel.bioUmbral)
+                                    (if (bio.first!!.media > bio.second!!.media) "  → filtro quita el 2" else "  → filtro quita el 1") else "",
+                            style = MaterialTheme.typography.labelSmall)
                         p.siguienteLocal?.let { s -> Text("Tras «${p.formaLocal}» en casa: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
                         p.siguienteVisit?.let { s -> Text("Tras «${p.formaVisit}» fuera: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
                         var ver by remember(p) { mutableStateOf(false) }
@@ -252,6 +280,8 @@ private fun GeneradorVista(b: Base, sel: Sel) {
     val est = b.estadistica
     val prox = b.proximas.getOrNull(sel.jornada)
     val pr = remember(prox, sel.k, b) { prox?.let { pronosticos(b, it, sel.k) }.orEmpty() }
+    val bios = remember(prox, b) { prox?.let { biorritmos(b, it) }.orEmpty() }
+    val efectivos = if (sel.bio) conBiorritmo(sel.permitidos, bios, sel.bioUmbral) else sel.permitidos
     LaunchedEffect(pr, sel.umbral) { if (!sel.editado) sel.permitidos = autoPermitidos(pr, sel.umbral) }
     val excel = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { uri ->
         val g = sel.resultado ?: return@rememberLauncherForActivityResult
@@ -269,7 +299,7 @@ private fun GeneradorVista(b: Base, sel: Sel) {
         }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (prox == null) item { Text("No hay jornadas publicadas todavía.") } else jornadaItems(b, sel, prox, pr)
+        if (prox == null) item { Text("No hay jornadas publicadas todavía.") } else jornadaItems(b, sel, prox, pr, bios)
         item {
             Card {
                 Column(Modifier.padding(12.dp)) {
@@ -298,6 +328,21 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                     Text("Signos elegidos: ${14 - d - t} fijos, $d dobles, $t triples " +
                         "(${miles(sel.permitidos.fold(1L) { a, m -> a * Integer.bitCount(m) })} columnas antes de las máscaras).",
                         style = MaterialTheme.typography.bodySmall)
+                    Text("Biorritmo", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    Text("Media del biorritmo (físico 23 días, emocional 28, intelectual 33) de los 11 jugadores que más veces " +
+                        "han sido titulares esta temporada, el día del partido. Solo equipos de 1ª y 2ª. Si un equipo está por debajo " +
+                        "del otro más que el umbral, se quita el signo que le daría la victoria. Ojo: es una teoría sin respaldo científico.",
+                        style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Switch(checked = sel.bio, onCheckedChange = { sel.bio = it; sel.resultado = null })
+                        Text("  Aplicar filtro biorritmo · umbral ${"%.2f".format(sel.bioUmbral)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (sel.bio) Slider(value = sel.bioUmbral, onValueChange = { sel.bioUmbral = it; sel.resultado = null }, valueRange = 0.05f..0.8f)
+                    val antes = sel.permitidos.fold(1L) { a, m -> a * Integer.bitCount(m) }
+                    val despues = efectivos.fold(1L) { a, m -> a * Integer.bitCount(m) }
+                    if (sel.bio) Text("Con el biorritmo: ${miles(antes)} → ${miles(despues)} columnas antes de las máscaras " +
+                        "(${bios.count { it.first != null && it.second != null }} partidos con datos de los dos equipos).",
+                        style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     Text("3 · Racha máxima de signos iguales seguidos", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         listOf(0, 3, 4, 5, 6).forEach { r ->
@@ -311,6 +356,19 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                             FilterChip(selected = sel.tope == n, onClick = { sel.tope = n; sel.resultado = null }, label = { Text(miles(n.toLong())) })
                         }
                     }
+                    Text("Cómo elegirlas", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                    FilterChip(selected = sel.modo == Generador.Modo.POR_MASCARA, onClick = { sel.modo = Generador.Modo.POR_MASCARA; sel.resultado = null },
+                        label = { Text("Las más probables de cada máscara") })
+                    if (sel.modo == Generador.Modo.POR_MASCARA) {
+                        Text("Para cada máscara elegida, las columnas con más probabilidad según rachas (y biorritmo): " +
+                            "${sel.porMascara} por máscara × ${sel.mascaras.orEmpty().size} máscaras = ${sel.porMascara * sel.mascaras.orEmpty().size} columnas como máximo.",
+                            style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf(1, 2, 3, 5, 10, 25).forEach { n ->
+                                FilterChip(selected = sel.porMascara == n, onClick = { sel.porMascara = n; sel.resultado = null }, label = { Text("$n") })
+                            }
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         FilterChip(selected = sel.modo == Generador.Modo.PROBABLES, onClick = { sel.modo = Generador.Modo.PROBABLES; sel.resultado = null }, label = { Text("Las más probables") })
                         FilterChip(selected = sel.modo == Generador.Modo.AZAR, onClick = { sel.modo = Generador.Modo.AZAR; sel.resultado = null }, label = { Text("Al azar (solar)") })
@@ -321,7 +379,8 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                             val probs = Array(14) { i -> pr.getOrNull(i)?.p ?: doubleArrayOf(1 / 3.0, 1 / 3.0, 1 / 3.0) }
                             val ms = sel.mascaras.orEmpty()
                             val g = withContext(Dispatchers.Default) {
-                                Generador.generar(sel.permitidos, ms, sel.racha, probs, sel.tope, sel.modo, SolarEntropy.random(),
+                                Generador.generar(efectivos, ms, sel.racha, probs,
+                                    if (sel.modo == Generador.Modo.POR_MASCARA) sel.porMascara else sel.tope, sel.modo, SolarEntropy.random(),
                                     Generador.aciertosHistoricos(b.quinielas, ms, sel.racha))
                             }
                             sel.resultado = g; calculando = false
@@ -357,6 +416,11 @@ private fun GeneradorVista(b: Base, sel: Sel) {
             }
             items(g.columnas.take(500).withIndex().toList()) { (n, c) ->
                 val t = Generador.texto(c)
+                val m = Mascara.de(t)
+                val prev = if (n > 0) Mascara.de(Generador.texto(g.columnas[n - 1])) else null
+                if (g.porMascara.isNotEmpty() && m != prev) Text(
+                    "Máscara $m · ${dec(b.estadistica.porcentaje(m), 1)} % de las quinielas · ${miles(g.porMascara[m.codigo] ?: 0)} columnas posibles con los filtros",
+                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
                 Row(Modifier.fillMaxWidth()) {
                     Text("${n + 1}.", Modifier.width(48.dp), style = MaterialTheme.typography.bodySmall)
                     Text(t.chunked(1).joinToString(" "), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))

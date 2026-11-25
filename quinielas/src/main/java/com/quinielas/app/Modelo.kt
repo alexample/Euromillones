@@ -250,7 +250,9 @@ class Tendencias(ligas: List<Liga>) {
 // ======================================================================== GENERADOR
 
 class Generacion(
-    val columnas: IntArray,      // cada columna: 14 signos en base 3 (0 = 1, 1 = X, 2 = 2), posición 0 = dígito más bajo
+    val columnas: IntArray,
+    /** Con el modo «por máscara»: cuántas columnas válidas había en cada máscara (código → nº). */
+    val porMascara: Map<Int, Long> = emptyMap(),      // cada columna: 14 signos en base 3 (0 = 1, 1 = X, 2 = 2), posición 0 = dígito más bajo
     val total: Long,             // columnas que cumplen todos los filtros
     val probAcierto: Double,     // probabilidad (según el modelo) de que la ganadora esté entre las elegidas
     val coberturaHist: Double,   // % de quinielas históricas cuya máscara estaba permitida
@@ -283,6 +285,17 @@ object Generador {
         val res = IntArray(tope.coerceAtLeast(1)); var vistos = 0L
         var total = 0L
         var masa = 0.0
+        // Las [tope] mejores DENTRO de cada máscara (rachas + máscaras combinadas)
+        val grupoCol = HashMap<Int, IntArray>(); val grupoSc = HashMap<Int, DoubleArray>(); val grupoN = HashMap<Int, Int>()
+        val grupoTotal = HashMap<Int, Long>()
+        fun pushGrupo(code: Int, col: Int, sc: Double) {
+            grupoTotal[code] = (grupoTotal[code] ?: 0L) + 1
+            val cs = grupoCol.getOrPut(code) { IntArray(tope) }; val ss = grupoSc.getOrPut(code) { DoubleArray(tope) }
+            val n = grupoN[code] ?: 0
+            if (n < tope) { cs[n] = col; ss[n] = sc; grupoN[code] = n + 1; return }
+            var mi = 0; for (i in 1 until n) if (ss[i] < ss[mi]) mi = i
+            if (sc > ss[mi]) { cs[mi] = col; ss[mi] = sc }
+        }
         val pow3 = IntArray(14).also { it[0] = 1; for (i in 1 until 14) it[i] = it[i - 1] * 3 }
 
         fun push(col: Int, sc: Double) {
@@ -307,6 +320,7 @@ object Generador {
                 masa += exp(sc)
                 when (modo) {
                     Modo.PROBABLES, Modo.TODAS -> push(col, sc)
+                    Modo.POR_MASCARA -> pushGrupo(u * 16 + x, col, sc)
                     Modo.AZAR -> { vistos++; if (vistos <= res.size) res[(vistos - 1).toInt()] = col
                         else { val j = (rnd.nextDouble() * vistos).toLong(); if (j < res.size) res[j.toInt()] = col } }
                 }
@@ -330,7 +344,17 @@ object Generador {
         }
         rec(0, 0, 0, 0, 0, -1, 0, 0.0)
 
+        val orden = mascaras.toList()      // de más a menos frecuente
         val elegidas = when (modo) {
+            Modo.POR_MASCARA -> {
+                val out = ArrayList<Int>()
+                for (m in orden) {
+                    val n = grupoN[m.codigo] ?: continue
+                    val cs = grupoCol[m.codigo]!!; val ss = grupoSc[m.codigo]!!
+                    (0 until n).sortedByDescending { ss[it] }.forEach { out += cs[it] }
+                }
+                out.toIntArray()
+            }
             Modo.AZAR -> res.copyOf(minOf(res.size.toLong(), vistos).toInt())
             else -> {
                 val idx = (0 until hn).sortedByDescending { heapSc[it] }
@@ -338,10 +362,10 @@ object Generador {
             }
         }
         val pElegidas = elegidas.sumOf { c -> var s = 0.0; for (i in 0 until 14) s += lp[i][(c / pow3[i]) % 3]; exp(s) }
-        return Generacion(elegidas, total, if (modo == Modo.TODAS && total <= tope) masa else pElegidas, coberturaHist)
+        return Generacion(elegidas, grupoTotal, total, if (modo == Modo.TODAS && total <= tope) masa else pElegidas, coberturaHist)
     }
 
-    enum class Modo { TODAS, PROBABLES, AZAR }
+    enum class Modo { TODAS, PROBABLES, AZAR, POR_MASCARA }
 
     /** Cuántas columnas habría acertado cada máscara permitida en el histórico (para validar el filtro). */
     fun aciertosHistoricos(q: List<Quiniela>, mascaras: Set<Mascara>, rachaMax: Int): Double {
@@ -355,4 +379,67 @@ object Generador {
     private fun run(s: String): Int { var b = 1; var r = 1; for (i in 1 until s.length) { if (s[i] == s[i - 1]) { r++; if (r > b) b = r } else r = 1 }; return b }
 
     const val PRECIO = 0.75
+}
+
+
+// ======================================================================== BIORRITMO
+
+/** Jugador de la plantilla actual: fecha de nacimiento y partidos como titular esta temporada. */
+data class Jugador(val nombre: String, val nacimiento: java.time.LocalDate, val titular: Int, val partidos: Int, val puesto: String)
+
+data class Plantilla(val nombre: String, val liga: Int, val jugadores: List<Jugador>)
+
+/** Biorritmo medio de un equipo: físico (23 días), emocional (28) e intelectual (33), de −1 a +1. */
+data class Bio(val fisico: Double, val emocional: Double, val intelectual: Double, val jugadores: Int) {
+    val media: Double get() = (fisico + emocional + intelectual) / 3
+}
+
+/**
+ * Teoría del biorritmo: tres ciclos que empiezan el día del nacimiento. Se calcula el de los 11 jugadores
+ * que más veces han sido titulares esta temporada y se hace la media para el día del partido.
+ * (Es una teoría sin respaldo científico; aquí se usa solo como filtro para reducir columnas.)
+ */
+object Biorritmo {
+    fun ciclos(nac: java.time.LocalDate, dia: java.time.LocalDate): DoubleArray {
+        val t = java.time.temporal.ChronoUnit.DAYS.between(nac, dia).toDouble()
+        return doubleArrayOf(kotlin.math.sin(2 * Math.PI * t / 23), kotlin.math.sin(2 * Math.PI * t / 28), kotlin.math.sin(2 * Math.PI * t / 33))
+    }
+
+    fun equipo(p: Plantilla, dia: java.time.LocalDate, n: Int = 11): Bio? {
+        val xi = p.jugadores.filter { it.titular > 0 }.sortedByDescending { it.titular }.take(n)
+            .ifEmpty { p.jugadores.sortedByDescending { it.partidos }.take(n) }
+        if (xi.isEmpty()) return null
+        val a = DoubleArray(3)
+        for (j in xi) { val c = ciclos(j.nacimiento, dia); for (i in 0..2) a[i] += c[i] }
+        return Bio(a[0] / xi.size, a[1] / xi.size, a[2] / xi.size, xi.size)
+    }
+}
+
+/** Busca la plantilla de un equipo de la quiniela (los nombres de SELAE y de ESPN no coinciden del todo). */
+class Plantillas(val todas: List<Plantilla>) {
+    fun de(nombre: String): Plantilla? {
+        if (nombre.contains("(f)", ignoreCase = true)) return null
+        val w = fichas(nombre)
+        if (w.isEmpty()) return null
+        var mejor: Plantilla? = null; var ms = 0.0; var segundo = 0.0
+        for (p in todas) {
+            val pw = fichas(p.nombre)
+            val inter = w.count { it in pw }.toDouble()
+            val sc = inter / (w.size + pw.size - inter)
+            if (sc > ms) { segundo = ms; ms = sc; mejor = p } else if (sc > segundo) segundo = sc
+        }
+        // Vale si todas las palabras del nombre de la quiniela están en el de la plantilla («Betis» → «Real Betis»)
+        // o si se parecen mucho; así «Sporting de Portugal» no se confunde con el Sporting de Gijón.
+        val m = mejor ?: return null
+        val sub = w.all { it in fichas(m.nombre) }
+        return m.takeIf { (sub || ms >= 0.67) && ms > segundo }
+    }
+
+    companion object {
+        private val VACIAS = setOf("club", "cd", "ud", "sd", "rcd", "rc", "fc", "cf", "sad", "de", "la", "el", "c", "f")
+        fun fichas(s: String): Set<String> = Equipos.sinAcentos(s).lowercase().split(Regex("[^a-z0-9]+"))
+            .filter { it.isNotEmpty() && it !in VACIAS }
+            .map { when (it) { "at", "atl", "atletico" -> "atl"; "athletic", "ath" -> "ath"; "r", "real" -> "real"; "vigo" -> "celta"; "gijon" -> "sporting"; "ii" -> "b"; else -> it } }
+            .toSet()
+    }
 }
