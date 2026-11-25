@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: "17 6,22 * * *"
   push:
-    paths: [scripts/probe_quiniela.py, scripts/build_quinielas.py]
+    paths: [scripts/build_quinielas.py]
 
 permissions:
   contents: write
@@ -13,6 +13,7 @@ permissions:
 jobs:
   quinielas:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Descargar
@@ -20,7 +21,7 @@ jobs:
           if [ -f scripts/build_quinielas.py ]; then python3 scripts/build_quinielas.py; else python3 scripts/probe_quiniela.py; fi
       - name: Guardar
         run: |
-          git add data || true
+          git add data quinielas/src/main/assets || true
           if git diff --cached --quiet; then echo "Sin cambios"; else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

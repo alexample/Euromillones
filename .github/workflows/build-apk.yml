@@ -7,6 +7,8 @@ on:
       - "data/**"
       - "scripts/**"
       - "README.md"
+      - "quinielas/src/main/assets/**"
+      - ".github/workflows/datos-*.yml"
   workflow_dispatch:
 
 permissions:
