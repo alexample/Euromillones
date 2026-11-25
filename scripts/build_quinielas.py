@@ -132,3 +132,41 @@ os.makedirs("quinielas/src/main/assets", exist_ok=True)
 for f in ("quinielas.json", "ligas.json", "equipos.json", "jornada.json"):
     with open("data/" + f, encoding="utf-8") as a, open("quinielas/src/main/assets/" + f, "w", encoding="utf-8") as b:
         b.write(a.read())
+
+# ---------------- Plantillas (para el biorritmo): jugadores con fecha de nacimiento y titularidades ----------------
+def espn(u):
+    t = get(u)
+    return json.loads(t) if t else None
+
+plantillas = {}
+for lg in ("esp.1", "esp.2"):
+    t = espn(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/teams")
+    if not t: continue
+    for x in t["sports"][0]["leagues"][0]["teams"]:
+        tm = x["team"]
+        r = espn(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/teams/{tm['id']}/roster")
+        if not r: continue
+        jug = []
+        for a in r.get("athletes", []):
+            dob = (a.get("dateOfBirth") or "")[:10]
+            st = {}
+            for cat in (a.get("statistics") or {}).get("splits", {}).get("categories", []):
+                for s in cat.get("stats", []):
+                    st[s.get("name")] = s.get("value") or 0
+            ap = int(st.get("appearances", 0) or 0)
+            sub = int(st.get("subIns", 0) or 0)
+            tit = int(st.get("starts", ap - sub) or 0)
+            if not plantillas and not jug:
+                print("estadísticas disponibles:", sorted(st.keys()))
+            if dob:
+                jug.append({"n": a.get("displayName"), "f": dob, "t": max(0, tit), "a": ap,
+                            "p": (a.get("position") or {}).get("abbreviation", "")})
+        jug.sort(key=lambda j: (-j["t"], -j["a"]))
+        plantillas[tm["displayName"]] = {"liga": 1 if lg == "esp.1" else 2, "corto": tm.get("shortDisplayName", ""),
+                                         "abr": tm.get("abbreviation", ""), "jugadores": jug}
+        time.sleep(0.2)
+print("plantillas:", len(plantillas), sum(len(v["jugadores"]) for v in plantillas.values()), "jugadores")
+if plantillas:
+    dump("data/plantillas.json", plantillas)
+    with open("data/plantillas.json", encoding="utf-8") as a, open("quinielas/src/main/assets/plantillas.json", "w", encoding="utf-8") as b:
+        b.write(a.read())
