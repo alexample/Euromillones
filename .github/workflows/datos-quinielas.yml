@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: "17 6,22 * * *"
   push:
-    paths: [scripts/build_quinielas.py]
+    paths: [scripts/build_quinielas.py, scripts/probe_espn.py]
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Descargar
         run: |
-          if [ -f scripts/build_quinielas.py ]; then python3 scripts/build_quinielas.py; else python3 scripts/probe_quiniela.py; fi
+          python3 scripts/build_quinielas.py; if [ -f scripts/probe_espn.py ]; then python3 scripts/probe_espn.py; fi
       - name: Guardar
         run: |
           git add data quinielas/src/main/assets || true
