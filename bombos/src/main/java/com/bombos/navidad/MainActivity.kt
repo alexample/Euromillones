@@ -253,6 +253,7 @@ private fun Escenario(e: Estado, running: Boolean, vel: Float, voz: Boolean, onV
             }
         }
         item { Fisica3D(e) }
+        item { DiarioCard(e) }
         item { Calendario(e) }
         item {
             Text("Bombo de premios: quedan", fontWeight = FontWeight.SemiBold)
@@ -271,6 +272,44 @@ private fun Escenario(e: Estado, running: Boolean, vel: Float, voz: Boolean, onV
                     "Semilla del azar: ${e.semilla.take(16)}… (rayos X del Sol, NOAA)",
                 style = MaterialTheme.typography.labelSmall,
             )
+        }
+    }
+}
+
+@Composable
+private fun DiarioCard(e: Estado) {
+    val ctx = LocalContext.current
+    var on by remember { mutableStateOf(Diario.activo(ctx)) }
+    var exacta by remember { mutableStateOf(true) }
+    Card(colors = CardDefaults.cardColors(containerColor = if (e.diario) Color(0xFFFFF7E6) else Color(0xFFF3EEF6))) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Sorteo diario en tiempo real", fontWeight = FontWeight.Bold)
+            Text(
+                "Cada mañana a las 8:00 (apertura de la sala) empieza un sorteo nuevo que va con el reloj del móvil: " +
+                    "primera bola hacia las 9:09 y última hacia las 13:25. Todos quedan guardados en «Sorteos» y se avisa " +
+                    "si un premio mayor repite número de otro sorteo o de un sorteo real.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (e.diario) Text("▶ Este es un sorteo diario.", style = MaterialTheme.typography.bodySmall, color = Rojo)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = on, onCheckedChange = { v -> on = v; Diario.activar(ctx, v); if (v) exacta = Diario.programar(ctx) })
+                Text(
+                    if (on) "  Activado · próximo: ${Diario.proxima().let { "${it.dayOfMonth}/${it.monthValue} a las 8:00" }}"
+                    else "  Simular un sorteo cada mañana",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (on && !exacta && Build.VERSION.SDK_INT >= 31) {
+                Text("Android no deja poner la alarma exacta: da el permiso de «Alarmas y recordatorios».",
+                    style = MaterialTheme.typography.bodySmall, color = Rojo)
+                TextButton(onClick = {
+                    runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)) }
+                }) { Text("Dar permiso") }
+            }
+            OutlinedButton(onClick = { Sorteo.iniciarDiario() }) { Text("Empezar el de hoy ahora") }
+            Text("Si lo empiezas más tarde de las 8:00, se pone al día de golpe con la hora real. " +
+                "Usa el modo y las opciones que tengas elegidos (en 3D, si el móvil no llega, el reloj se corrige solo).",
+                style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -583,10 +622,18 @@ private fun Buscar(sid: Long, actual: Long) {
     var q by rememberSaveable { mutableStateOf("") }
     var filtro by remember { mutableStateOf<Filtro?>(null) }
     val digits = q.filter { it.isDigit() }.take(5)
-    val resultado by produceState<List<String>?>(null, sid, digits, filtro, ver) {
+    var todos by rememberSaveable { mutableStateOf(false) }
+    val resultado by produceState<List<String>?>(null, sid, digits, filtro, ver, todos) {
         value = withContext(Dispatchers.IO) {
             val m = Sorteo.db.mayores(sid)
             when {
+                todos && digits.length == 5 -> {
+                    val n = digits.toInt()
+                    val r = Sorteo.db.enTodos(n).map { (s, l) -> "Sorteo nº ${s.id} (${fecha(s.inicio)}): " + l.joinToString(" + ") }
+                    val real = Reales.de(n).map { "Real: $it" }
+                    (real + r).ifEmpty { listOf("El $digits no tiene premio en ningún sorteo guardado.") }
+                }
+                todos -> listOf("Escribe las 5 cifras para buscar en todos los sorteos.")
                 digits.length == 5 -> {
                     val n = digits.toInt()
                     val dir = Sorteo.db.buscarNumero(sid, digits)
@@ -609,7 +656,12 @@ private fun Buscar(sid: Long, actual: Long) {
         }
     }
     Column(Modifier.fillMaxSize().padding(10.dp)) {
-        Text(if (sid == actual) "Sorteo en curso (nº $sid)" else "Sorteo nº $sid", style = MaterialTheme.typography.labelMedium)
+        Text(if (todos) "Todos los sorteos guardados" else if (sid == actual) "Sorteo en curso (nº $sid)" else "Sorteo nº $sid",
+            style = MaterialTheme.typography.labelMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = todos, onCheckedChange = { todos = it })
+            Text("  Buscar en todos los sorteos", style = MaterialTheme.typography.bodySmall)
+        }
         OutlinedTextField(
             value = q, onValueChange = { q = it.filter { c -> c.isDigit() }.take(5); if (q.isNotEmpty()) filtro = null },
             label = { Text("Número (5 cifras = todos sus premios)") }, singleLine = true,
@@ -650,10 +702,13 @@ private fun Sorteos(actual: Long, visto: Long, onVer: (Long) -> Unit, onExcel: (
     val lista by produceState(emptyList<SorteoInfo>(), ver) { value = withContext(Dispatchers.IO) { Sorteo.db.sorteos() } }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item { Button(onClick = Sorteo::nuevo) { Text("Nuevo sorteo") } }
+        item { Repeticiones(ver) }
         items(lista, key = { it.id }) { s ->
             Card(Modifier.fillMaxWidth().clickable { onVer(s.id) }) {
                 Column(Modifier.padding(10.dp)) {
-                    Text("Sorteo nº ${s.id}" + if (s.id == actual) " · en curso" else if (s.id == visto) " · viendo" else "", fontWeight = FontWeight.Bold)
+                    Text("Sorteo nº ${s.id}" + (if (s.diario) " · diario " + java.time.LocalDateTime.ofEpochSecond(s.inicio, 0, ZoneOffset.UTC).let { "${it.dayOfMonth}/${it.monthValue}" } else "") +
+                        (if (s.calendario) " · horas 2025" else "") + (if (s.modo3d) " · 3D" else "") +
+                        if (s.id == actual) " · en curso" else if (s.id == visto) " · viendo" else "", fontWeight = FontWeight.Bold)
                     Text(
                         "${java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.ROOT).format(java.util.Date(s.creado))} · " +
                             "${s.extraidas} de 1.807 bolas · ${if (s.terminado) "terminado" else runCatching { Fase.valueOf(s.fase).titulo }.getOrDefault(s.fase)}",
@@ -665,6 +720,25 @@ private fun Sorteos(actual: Long, visto: Long, onVer: (Long) -> Unit, onExcel: (
                         if (s.id != actual) TextButton(onClick = { Sorteo.borrar(s.id) }) { Text("Borrar") }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Repeticiones(ver: Long) {
+    val repes by produceState(emptyList<SorteoDb.Repe>(), ver) { value = withContext(Dispatchers.IO) { Sorteo.db.repes() } }
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF1F2))) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text("🔁 Premios mayores repetidos (${repes.size})", fontWeight = FontWeight.Bold, color = Rojo)
+            if (repes.isEmpty()) Text(
+                "Todavía ninguno. Se avisa cuando un Gordo, 2º, 3º, 4º o 5º coincide con un premio mayor de otro sorteo simulado " +
+                    "o de un sorteo real (Navidad desde 2007 y Gordos desde 1920; Niño desde 2008).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            repes.take(50).forEach { x ->
+                Text("${Canto.n5(x.numero)} · ${x.cat.nombre} del sorteo nº ${x.sorteo} (${fecha(x.t)}, ${hora(x.t)}) → ya fue: ${x.coincide}",
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
             }
         }
     }

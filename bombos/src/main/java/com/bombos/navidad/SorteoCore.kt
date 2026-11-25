@@ -109,6 +109,7 @@ data class Estado(
     val semilla: String = "",
     val modo3d: Boolean = false,
     val calendario: Boolean = false,        // premios mayores a la hora del sorteo de 2025
+    val diario: Boolean = false,            // sorteo diario en tiempo real (empieza a las 8:00)
     val esperandoFisica: Boolean = false,   // el reloj va al ritmo que da el móvil
 )
 
@@ -194,6 +195,10 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
 
     var estado = Estado(); private set
     var cantos: ((String) -> Unit)? = null
+    /** Se llama cada vez que sale un premio mayor (para buscar repeticiones). */
+    var alPremioMayor: ((Extraccion) -> Unit)? = null
+    var diario = false
+        private set
 
     private var year = java.time.LocalDate.now().year
     private var restante = 0.0          // segundos que le quedan al paso/fase actual
@@ -230,7 +235,37 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         crearBombos(tresD)
         reset()
         calendario = cal
+        diario = false
         estado = Estado(sorteo = id, fase = Fase.LISTO, reloj = hora(year, 12, 21, 10, 0), semilla = semilla, modo3d = tresD, calendario = cal)
+    }
+
+    /**
+     * Sorteo diario: empieza en la apertura de la sala (8:00 del día [fecha]) y el reloj del sorteo es el del
+     * móvil. Si arranca tarde (móvil apagado, app cerrada…), se pone al día de golpe hasta la hora actual.
+     */
+    fun nuevoDiario(semilla: String, tresD: Boolean, cal: Boolean, fecha: java.time.LocalDate) {
+        val inicio = fecha.atTime(8, 0).toEpochSecond(java.time.ZoneOffset.UTC)
+        val id = store.nuevo(semilla, inicio, (if (tresD) 1 else 0) or (if (cal) 2 else 0) or 4)
+        crearBombos(tresD)
+        reset()
+        calendario = cal
+        diario = true
+        year = fecha.year
+        estado = Estado(sorteo = id, fase = Fase.LISTO, reloj = inicio, semilla = semilla, modo3d = tresD, calendario = cal, diario = true)
+        entrar(Fase.APERTURA)
+    }
+
+    /** Avanza sin física hasta [ahora] (segundos, hora local como UTC). */
+    fun ponerseAlDia(ahora: Long) {
+        val f = fisica
+        fisica = false
+        var guard = 0
+        while (estado.reloj < ahora - 1 && estado.fase != Fase.TERMINADO && estado.fase != Fase.LISTO && guard++ < 2_000_000) {
+            tick(min(30.0, (ahora - estado.reloj).toDouble()))
+        }
+        fisica = f
+        flush()
+        if (num.n == 0 && estado.fase.ordinal > Fase.CARGA.ordinal) llenarAsentados()
     }
 
     // ---------------- Premios a la hora de 2025 ----------------
@@ -281,6 +316,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         crearBombos(tresD)
         reset()
         calendario = modo and 2 != 0
+        diario = modo and 4 != 0
         val hechas = store.extracciones(id).sortedBy { it.orden }
         val sacados = BooleanArray(NUMEROS)
         val usadas = IntArray(Cat.entries.size)
@@ -304,7 +340,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         val f = runCatching { Fase.valueOf(fase) }.getOrDefault(Fase.LISTO)
         year = java.time.LocalDate.now().year
         val reloj = last?.t ?: hora(year, 12, 21, 10, 0)
-        estado = estado.copy(sorteo = id, reloj = reloj, modo3d = tresD, calendario = calendario)
+        estado = estado.copy(sorteo = id, reloj = reloj, modo3d = tresD, calendario = calendario, diario = diario)
         // Premios del calendario que ya salieron
         hechas.filter { it.cat.grande }.forEach { e ->
             val k = Calendario2025.HITOS.indices.firstOrNull { !hitoUsado[it] && Calendario2025.HITOS[it].cat == e.cat }
@@ -731,7 +767,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         pendientes += e
         ultimas.addFirst(e)
         while (ultimas.size > 60) ultimas.removeLast()
-        if (c.grande) { mayores += e; flush() }
+        if (c.grande) { mayores += e; flush(); alPremioMayor?.invoke(e) }
         estado = estado.copy(pos = pos)
         paso = Paso.INSERTA
         restante = T_INSERTA
@@ -754,7 +790,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         estado = estado.copy(
             paso = paso, progreso = prog, extraidas = extraidas, quedan = quedan.copyOf(),
             ultimas = ultimas.toList(), mayores = mayores.toList(), liras = liras, fisica = fisica,
-            modo3d = modo3d, calendario = calendario, esperandoFisica = esperandoFisica,
+            modo3d = modo3d, calendario = calendario, diario = diario, esperandoFisica = esperandoFisica,
         )
         return estado
     }

@@ -5,10 +5,10 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
-data class SorteoInfo(val id: Long, val creado: Long, val inicio: Long, val fase: String, val terminado: Boolean, val semilla: String, val extraidas: Int, val modo3d: Boolean = false, val calendario: Boolean = false)
+data class SorteoInfo(val id: Long, val creado: Long, val inicio: Long, val fase: String, val terminado: Boolean, val semilla: String, val extraidas: Int, val modo3d: Boolean = false, val calendario: Boolean = false, val diario: Boolean = false)
 
 /** Sorteos simulados y todas sus bolas (número + premio, tabla, alambre y hora). */
-class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Store {
+class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 3), Store {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -22,10 +22,20 @@ class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Stor
         )
         db.execSQL("CREATE INDEX bolas_num ON bolas (sorteo, numero)")
         db.execSQL("CREATE INDEX bolas_premio ON bolas (sorteo, premio)")
+        crearRepes(db)
+    }
+
+    private fun crearRepes(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS repes (id INTEGER PRIMARY KEY AUTOINCREMENT, sorteo INTEGER NOT NULL, numero INTEGER NOT NULL,
+               premio TEXT NOT NULL, coincide TEXT NOT NULL, t INTEGER NOT NULL)""",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS bolas_numero ON bolas (numero)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE sorteos ADD COLUMN modo INTEGER NOT NULL DEFAULT 0")
+        if (oldVersion < 3) crearRepes(db)
     }
 
     override fun nuevo(semilla: String, inicio: Long, modo: Int): Long =
@@ -83,11 +93,60 @@ class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Stor
                 "FROM sorteos s ORDER BY s.id DESC", null,
         ).use { c ->
             val out = ArrayList<SorteoInfo>()
-            while (c.moveToNext()) out += SorteoInfo(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getInt(4) == 1, c.getString(5), c.getInt(6), c.getInt(7) and 1 != 0, c.getInt(7) and 2 != 0)
+            while (c.moveToNext()) out += SorteoInfo(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getInt(4) == 1, c.getString(5), c.getInt(6), c.getInt(7) and 1 != 0, c.getInt(7) and 2 != 0, c.getInt(7) and 4 != 0)
             out
         }
 
+    /** El mismo número con premio mayor en OTROS sorteos simulados: "Gordo del sorteo nº 12 (25/11)". */
+    fun mayoresConNumero(numero: Int, excepto: Long): List<String> =
+        readableDatabase.rawQuery(
+            "SELECT b.sorteo, b.premio, s.inicio FROM bolas b JOIN sorteos s ON s.id = b.sorteo " +
+                "WHERE b.numero = ? AND b.premio <> 'P' AND b.sorteo <> ? ORDER BY b.sorteo",
+            arrayOf(numero.toString(), excepto.toString()),
+        ).use { c ->
+            val out = ArrayList<String>()
+            while (c.moveToNext()) {
+                val cat = Cat.of(c.getString(1))?.let { corto(it) } ?: "premio"
+                val f = java.time.LocalDateTime.ofEpochSecond(c.getLong(2), 0, java.time.ZoneOffset.UTC).toLocalDate()
+                out += "$cat del sorteo simulado nº ${c.getLong(0)} (${f.dayOfMonth}/${f.monthValue}/${f.year})"
+            }
+            out
+        }
+
+    fun guardarRepe(sorteo: Long, numero: Int, premio: Cat, coincide: String, t: Long) {
+        writableDatabase.insert("repes", null, ContentValues().apply {
+            put("sorteo", sorteo); put("numero", numero); put("premio", premio.code); put("coincide", coincide); put("t", t)
+        })
+    }
+
+    data class Repe(val sorteo: Long, val numero: Int, val cat: Cat, val coincide: String, val t: Long)
+
+    fun repes(): List<Repe> =
+        readableDatabase.rawQuery("SELECT sorteo, numero, premio, coincide, t FROM repes ORDER BY id DESC", null).use { c ->
+            val out = ArrayList<Repe>()
+            while (c.moveToNext()) out += Repe(c.getLong(0), c.getInt(1), Cat.of(c.getString(2)) ?: Cat.QUINTO, c.getString(3), c.getLong(4))
+            out
+        }
+
+    /** Un número en TODOS los sorteos guardados: premio directo y derivados de cada uno. */
+    fun enTodos(numero: Int): List<Pair<SorteoInfo, List<String>>> {
+        val out = ArrayList<Pair<SorteoInfo, List<String>>>()
+        for (s in sorteos()) {
+            if (s.extraidas == 0) continue
+            val lines = ArrayList<String>()
+            buscarNumero(s.id, "%05d".format(numero)).forEach { x -> lines += "${x.cat.nombre} (${Canto.euros(x.cat.importe)})" }
+            mayores(s.id).derivados(numero).forEach { d -> lines += "${d.nombre} (${Canto.euros(d.importe)})" }
+            if (lines.isNotEmpty()) out += s to lines
+        }
+        return out
+    }
+
+    private fun corto(c: Cat) = when (c) {
+        Cat.GORDO -> "Gordo"; Cat.SEGUNDO -> "2º"; Cat.TERCERO -> "3º"; Cat.CUARTO -> "4º"; Cat.QUINTO -> "5º"; Cat.PEDREA -> "pedrea"
+    }
+
     fun borrar(sorteo: Long) {
+        writableDatabase.delete("repes", "sorteo = ?", arrayOf(sorteo.toString()))
         writableDatabase.delete("bolas", "sorteo = ?", arrayOf(sorteo.toString()))
         writableDatabase.delete("sorteos", "id = ?", arrayOf(sorteo.toString()))
     }

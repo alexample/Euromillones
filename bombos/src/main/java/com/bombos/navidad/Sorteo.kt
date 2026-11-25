@@ -69,6 +69,9 @@ object Sorteo {
         SolarEntropy.start()
         core = SorteoCore(db) { SolarEntropy.random() }
         core.cantos = { s -> _cantos.tryEmit(s) }
+        core.alPremioMayor = { e -> comprobarRepeticion(core.estado.sorteo, e) }
+        Reales.load(app)
+        crearCanalRepes()
         val prefs = app.getSharedPreferences("bombos", Context.MODE_PRIVATE)
         _velocidad.value = prefs.getFloat("velocidad", 1f)
         _modo3d.value = prefs.getBoolean("modo3d", false)
@@ -80,11 +83,77 @@ object Sorteo {
                 val f = ficheroFisica()
                 val inp = if (c.third and 1 != 0 && f.exists()) runCatching { f.inputStream() }.getOrNull() else null
                 try { core.retomar(c.first, c.second, c.third, inp) } finally { inp?.close() }
+                // Sorteo diario a medias: se pone al día con la hora real (si era de otro día, se termina)
+                if (core.diario) {
+                    core.ponerseAlDia(ahoraLocal())
+                    if (core.estado.fase != Fase.TERMINADO) { _velocidad.value = 1f; _running.value = true }
+                }
             } else core.nuevo(semilla(), _modo3d.value, _calendario.value)
             _estado.value = core.publicar()
             frame = core.frame()
         }
         startLoop()
+        if (_running.value) SorteoService.start(app)
+        if (Diario.activo(app)) Diario.programar(app)
+    }
+
+    /** Hora local del móvil en segundos (mismo formato que el reloj del sorteo). */
+    fun ahoraLocal(): Long = java.time.LocalDateTime.now().toEpochSecond(java.time.ZoneOffset.UTC)
+
+    /** Empieza el sorteo diario de hoy (a las 8:00 lo lanza la alarma; si se pulsa más tarde, se pone al día). */
+    fun iniciarDiario() {
+        _running.value = false
+        synchronized(lock) {
+            core.flush()
+            if (core.diario && core.estado.fase != Fase.TERMINADO &&
+                java.time.LocalDateTime.ofEpochSecond(core.estado.reloj, 0, java.time.ZoneOffset.UTC).toLocalDate() == java.time.LocalDate.now()) {
+                // ya hay uno de hoy en marcha: se sigue con él
+            } else {
+                core.nuevoDiario(semilla(), _modo3d.value, _calendario.value, java.time.LocalDate.now())
+            }
+            core.ponerseAlDia(ahoraLocal())
+            _estado.value = core.publicar()
+        }
+        setVelocidad(1f)
+        _version.value++
+        if (_estado.value.fase != Fase.TERMINADO) {
+            _running.value = true
+            SorteoService.start(app)
+            _mensaje.value = "Sorteo diario en marcha, en tiempo real"
+        } else _mensaje.value = "El sorteo de hoy ya ha terminado; el próximo, mañana a las 8:00"
+    }
+
+    // ---------------- Repeticiones de premios mayores ----------------
+
+    private fun crearCanalRepes() {
+        val nm = app.getSystemService(android.app.NotificationManager::class.java)
+        nm.createNotificationChannel(android.app.NotificationChannel("repes", "Premios repetidos", android.app.NotificationManager.IMPORTANCE_HIGH))
+    }
+
+    /** ¿Este premio mayor ya lo fue en otro sorteo simulado o en un sorteo real? */
+    private fun comprobarRepeticion(sorteo: Long, e: Extraccion) {
+        scope.launch(Dispatchers.IO) {
+            val sim = db.mayoresConNumero(e.numero, sorteo)
+            val real = Reales.de(e.numero)
+            if (sim.isEmpty() && real.isEmpty()) return@launch
+            val coincide = (sim + real).joinToString(" · ")
+            db.guardarRepe(sorteo, e.numero, e.cat, coincide, e.t)
+            val txt = "${Canto.n5(e.numero)} (${e.cat.nombre}) ya fue: $coincide"
+            _mensaje.value = "🔁 $txt"
+            _version.value++
+            runCatching {
+                val n = androidx.core.app.NotificationCompat.Builder(app, "repes")
+                    .setSmallIcon(android.R.drawable.star_on)
+                    .setContentTitle("🔁 Premio repetido: ${Canto.n5(e.numero)}")
+                    .setContentText(txt)
+                    .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(txt))
+                    .setAutoCancel(true)
+                    .setContentIntent(android.app.PendingIntent.getActivity(app, 3, android.content.Intent(app, MainActivity::class.java),
+                        android.app.PendingIntent.FLAG_IMMUTABLE))
+                    .build()
+                app.getSystemService(android.app.NotificationManager::class.java).notify((e.numero + sorteo * 100_000).toInt(), n)
+            }
+        }
     }
 
     private fun ficheroFisica() = java.io.File(app.filesDir, "fisica3d.bin")
@@ -129,6 +198,8 @@ object Sorteo {
                             val fdt = if (core.fisica) (real * v).toFloat() else real.toFloat()
                             core.tick(real * v, fdt)
                         }
+                        // Sorteo diario a 1×: si el reloj se queda atrás (móvil lento, pausa del sistema…), se pone al día
+                        if (core.diario && v == 1f && core.estado.reloj < ahoraLocal() - 5) core.ponerseAlDia(ahoraLocal())
                         if (core.estado.fase == Fase.TERMINADO) fin = true
                     }
                     if (fin) pausar()

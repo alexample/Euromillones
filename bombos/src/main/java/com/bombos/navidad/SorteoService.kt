@@ -46,6 +46,9 @@ class SorteoService : Service() {
             this, NOTIF_ID, build(),
             if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0,
         )
+        if (intent?.action == ACTION_DIARIO) {
+            CoroutineScope(Dispatchers.Default).launch { Sorteo.iniciarDiario() }
+        }
         if (wakeLock == null) {
             wakeLock = getSystemService(PowerManager::class.java)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Bombos:sorteo")
@@ -94,6 +97,11 @@ class SorteoService : Service() {
         private const val CHANNEL = "sorteo"
         private const val NOTIF_ID = 1
         private const val ACTION_PAUSE = "com.bombos.navidad.PAUSE"
+        private const val ACTION_DIARIO = "com.bombos.navidad.EMPEZAR_DIARIO"
+
+        fun startDiario(ctx: Context) = runCatching {
+            ContextCompat.startForegroundService(ctx, Intent(ctx, SorteoService::class.java).setAction(ACTION_DIARIO))
+        }
 
         fun start(ctx: Context) = runCatching { ContextCompat.startForegroundService(ctx, Intent(ctx, SorteoService::class.java)) }
         fun stop(ctx: Context) { ctx.stopService(Intent(ctx, SorteoService::class.java)) }
