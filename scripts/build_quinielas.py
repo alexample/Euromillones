@@ -20,7 +20,8 @@ def get(u, tries=3):
 
 def limpia(n):
     if n is None: return None
-    return re.sub(r"\s*\((m|f)\)\s*$", "", n.strip())
+    # «(m)» = fútbol masculino (se quita); «(f)» = femenino (se deja: no hay que confundirlo con el equipo de 1ª)
+    return re.sub(r"\s*\(m\)\s*$", "", n.strip())
 
 API = ("https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAQU&celebrados={c}"
        "&fechaInicioInclusiva={a}&fechaFinInclusiva={b}")

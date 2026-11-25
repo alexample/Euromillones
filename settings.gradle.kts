@@ -17,3 +17,4 @@ rootProject.name = "Euromillones"
 include(":app")
 include(":geo")
 include(":bombos")
+include(":quinielas")

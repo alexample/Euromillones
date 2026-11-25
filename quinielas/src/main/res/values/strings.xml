@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Quinielas</string>
+    <color name="ic_bg">#166534</color>
+    <style name="Theme.Quinielas" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
