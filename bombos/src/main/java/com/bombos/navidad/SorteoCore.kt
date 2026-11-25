@@ -18,12 +18,13 @@ data class Extraccion(
 
 /** Dónde se guarda el sorteo (SQLite en el móvil; en memoria en las pruebas). */
 interface Store {
-    fun nuevo(semilla: String, inicio: Long, modo3d: Boolean): Long
+    /** [modo]: bit 1 = física 3D, bit 2 = premios a la hora de 2025. */
+    fun nuevo(semilla: String, inicio: Long, modo: Int): Long
     fun guardar(sorteo: Long, filas: List<Extraccion>)
     fun fase(sorteo: Long, fase: String)
     fun terminar(sorteo: Long)
     fun extracciones(sorteo: Long): List<Extraccion>
-    fun enCurso(): Triple<Long, String, Boolean>?   // sorteo sin terminar, su fase y si es 3D
+    fun enCurso(): Triple<Long, String, Int>?   // sorteo sin terminar, su fase y su modo
 }
 
 /** Fases reguladas del sorteo, en orden. */
@@ -107,6 +108,7 @@ data class Estado(
     val fisica: Boolean = true,
     val semilla: String = "",
     val modo3d: Boolean = false,
+    val calendario: Boolean = false,        // premios mayores a la hora del sorteo de 2025
     val esperandoFisica: Boolean = false,   // el reloj va al ritmo que da el móvil
 )
 
@@ -222,12 +224,40 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
 
     // ------------------------------------------------------------------ inicio
 
-    fun nuevo(semilla: String, tresD: Boolean = false) {
+    fun nuevo(semilla: String, tresD: Boolean = false, cal: Boolean = false) {
         year = java.time.LocalDate.now().year
-        val id = store.nuevo(semilla, hora(year, 12, 21, 10, 0), tresD)
+        val id = store.nuevo(semilla, hora(year, 12, 21, 10, 0), (if (tresD) 1 else 0) or (if (cal) 2 else 0))
         crearBombos(tresD)
         reset()
-        estado = Estado(sorteo = id, fase = Fase.LISTO, reloj = hora(year, 12, 21, 10, 0), semilla = semilla, modo3d = tresD)
+        calendario = cal
+        estado = Estado(sorteo = id, fase = Fase.LISTO, reloj = hora(year, 12, 21, 10, 0), semilla = semilla, modo3d = tresD, calendario = cal)
+    }
+
+    // ---------------- Premios a la hora de 2025 ----------------
+    var calendario = false
+        private set
+    private val hitoUsado = BooleanArray(Calendario2025.HITOS.size)
+
+    /** Qué premio toca ahora según el calendario de 2025 (null = pedrea). */
+    private fun premioDelCalendario(): Cat? {
+        val segundo = Math.floorMod(estado.reloj, 86_400L).toInt()
+        val pendientes = Calendario2025.HITOS.indices.filter { !hitoUsado[it] }
+        if (pendientes.isEmpty()) return null
+        val k = pendientes.firstOrNull { Calendario2025.HITOS[it].segundo <= segundo }
+            // si quedan tan pocas bolas como premios pendientes, salen ya (no se puede quedar ninguno sin salir)
+            ?: if (quedanPremios.size + 1 <= pendientes.size) pendientes.first() else null
+        return k?.let { hitoUsado[it] = true; Calendario2025.HITOS[it].cat }
+    }
+
+    /** Cambia la bola de premios que ha salido por una del premio que toca (la otra se queda en el bombo). */
+    private fun aplicarCalendario(b: Int): Int {
+        val quiero = premioDelCalendario() ?: Cat.PEDREA
+        if (bolas[b] == quiero) return b
+        val d = quedanPremios.firstOrNull { bolas[it] == quiero } ?: return b
+        quedanPremios.remove(d)
+        quedanPremios.add(b)
+        for (i in 0 until pre.n) if (pre.idAt(i) == d) { pre.setId(i, b); break }
+        return d
     }
 
     private fun reset() {
@@ -238,6 +268,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         ultimas.clear(); mayores.clear(); pendientes.clear()
         for (c in Cat.entries) quedan[c.ordinal] = c.count
         extraidas = 0; liras = 0; vertidas = 0.0; fly = -1.0
+        hitoUsado.fill(false)
         num.clear(); pre.clear()
         num.targetOmega = 0f; num.omega = 0f; pre.targetOmega = 0f; pre.omega = 0f
         num.gateOpen = false; pre.gateOpen = false
@@ -245,9 +276,11 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
     }
 
     /** Retoma un sorteo a medias (después de cerrar la app). */
-    fun retomar(id: Long, fase: String, tresD: Boolean = false, fisicaGuardada: java.io.InputStream? = null) {
+    fun retomar(id: Long, fase: String, modo: Int = 0, fisicaGuardada: java.io.InputStream? = null) {
+        val tresD = modo and 1 != 0
         crearBombos(tresD)
         reset()
+        calendario = modo and 2 != 0
         val hechas = store.extracciones(id).sortedBy { it.orden }
         val sacados = BooleanArray(NUMEROS)
         val usadas = IntArray(Cat.entries.size)
@@ -271,7 +304,12 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         val f = runCatching { Fase.valueOf(fase) }.getOrDefault(Fase.LISTO)
         year = java.time.LocalDate.now().year
         val reloj = last?.t ?: hora(year, 12, 21, 10, 0)
-        estado = estado.copy(sorteo = id, reloj = reloj, modo3d = tresD)
+        estado = estado.copy(sorteo = id, reloj = reloj, modo3d = tresD, calendario = calendario)
+        // Premios del calendario que ya salieron
+        hechas.filter { it.cat.grande }.forEach { e ->
+            val k = Calendario2025.HITOS.indices.firstOrNull { !hitoUsado[it] && Calendario2025.HITOS[it].cat == e.cat }
+            if (k != null) hitoUsado[k] = true
+        }
         if (hechas.isNotEmpty() || f.ordinal >= Fase.EXTRACCION.ordinal) {
             // En 3D se recupera la posición exacta de cada bola; si no se puede, se colocan mezcladas
             val ok = num.es3D && fisicaGuardada != null && runCatching { cargarFisica(id, fisicaGuardada) }.getOrDefault(false)
@@ -673,6 +711,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         num.gateOpen = false; pre.gateOpen = false
         actualNum = copaNum.removeFirst()
         actualPre = copaPre.removeFirst()
+        if (calendario) actualPre = aplicarCalendario(actualPre)
         paso = Paso.CANTA_NUMERO
         restante = T_CANTA_NUM
         cantar(Canto.numero(actualNum), false)
@@ -715,7 +754,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         estado = estado.copy(
             paso = paso, progreso = prog, extraidas = extraidas, quedan = quedan.copyOf(),
             ultimas = ultimas.toList(), mayores = mayores.toList(), liras = liras, fisica = fisica,
-            modo3d = modo3d, esperandoFisica = esperandoFisica,
+            modo3d = modo3d, calendario = calendario, esperandoFisica = esperandoFisica,
         )
         return estado
     }

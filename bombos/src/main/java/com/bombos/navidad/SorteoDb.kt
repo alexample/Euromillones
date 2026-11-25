@@ -5,7 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
-data class SorteoInfo(val id: Long, val creado: Long, val inicio: Long, val fase: String, val terminado: Boolean, val semilla: String, val extraidas: Int, val modo3d: Boolean = false)
+data class SorteoInfo(val id: Long, val creado: Long, val inicio: Long, val fase: String, val terminado: Boolean, val semilla: String, val extraidas: Int, val modo3d: Boolean = false, val calendario: Boolean = false)
 
 /** Sorteos simulados y todas sus bolas (número + premio, tabla, alambre y hora). */
 class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Store {
@@ -28,9 +28,9 @@ class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Stor
         if (oldVersion < 2) db.execSQL("ALTER TABLE sorteos ADD COLUMN modo INTEGER NOT NULL DEFAULT 0")
     }
 
-    override fun nuevo(semilla: String, inicio: Long, modo3d: Boolean): Long =
+    override fun nuevo(semilla: String, inicio: Long, modo: Int): Long =
         writableDatabase.insert("sorteos", null, ContentValues().apply {
-            put("creado", System.currentTimeMillis()); put("inicio", inicio); put("semilla", semilla); put("modo", if (modo3d) 1 else 0)
+            put("creado", System.currentTimeMillis()); put("inicio", inicio); put("semilla", semilla); put("modo", modo)
         })
 
     override fun guardar(sorteo: Long, filas: List<Extraccion>) {
@@ -72,9 +72,9 @@ class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Stor
             out
         }
 
-    override fun enCurso(): Triple<Long, String, Boolean>? =
+    override fun enCurso(): Triple<Long, String, Int>? =
         readableDatabase.rawQuery("SELECT id, fase, modo FROM sorteos WHERE terminado = 0 ORDER BY id DESC LIMIT 1", null).use { c ->
-            if (c.moveToFirst()) Triple(c.getLong(0), c.getString(1), c.getInt(2) == 1) else null
+            if (c.moveToFirst()) Triple(c.getLong(0), c.getString(1), c.getInt(2)) else null
         }
 
     fun sorteos(): List<SorteoInfo> =
@@ -83,7 +83,7 @@ class SorteoDb(ctx: Context) : SQLiteOpenHelper(ctx, "bombos.db", null, 2), Stor
                 "FROM sorteos s ORDER BY s.id DESC", null,
         ).use { c ->
             val out = ArrayList<SorteoInfo>()
-            while (c.moveToNext()) out += SorteoInfo(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getInt(4) == 1, c.getString(5), c.getInt(6), c.getInt(7) == 1)
+            while (c.moveToNext()) out += SorteoInfo(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getInt(4) == 1, c.getString(5), c.getInt(6), c.getInt(7) and 1 != 0, c.getInt(7) and 2 != 0)
             out
         }
 

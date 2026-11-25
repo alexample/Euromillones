@@ -53,6 +53,8 @@ object Sorteo {
         private set
 
     /** Física completa 3D (las 100.000 bolas) para el próximo sorteo nuevo. */
+    private val _calendario = MutableStateFlow(false)
+    val calendario: StateFlow<Boolean> = _calendario.asStateFlow()
     private val _modo3d = MutableStateFlow(false)
     val modo3d: StateFlow<Boolean> = _modo3d.asStateFlow()
     private val _prueba = MutableStateFlow<String?>(null)
@@ -70,14 +72,15 @@ object Sorteo {
         val prefs = app.getSharedPreferences("bombos", Context.MODE_PRIVATE)
         _velocidad.value = prefs.getFloat("velocidad", 1f)
         _modo3d.value = prefs.getBoolean("modo3d", false)
+        _calendario.value = prefs.getBoolean("calendario2025", false)
         _prueba.value = prefs.getString("prueba", null)
         synchronized(lock) {
             val c = db.enCurso()
             if (c != null) {
                 val f = ficheroFisica()
-                val inp = if (c.third && f.exists()) runCatching { f.inputStream() }.getOrNull() else null
+                val inp = if (c.third and 1 != 0 && f.exists()) runCatching { f.inputStream() }.getOrNull() else null
                 try { core.retomar(c.first, c.second, c.third, inp) } finally { inp?.close() }
-            } else core.nuevo(semilla(), _modo3d.value)
+            } else core.nuevo(semilla(), _modo3d.value, _calendario.value)
             _estado.value = core.publicar()
             frame = core.frame()
         }
@@ -171,13 +174,19 @@ object Sorteo {
 
     fun nuevo() {
         pausar()
-        synchronized(lock) { core.flush(); core.nuevo(semilla(), _modo3d.value) }
+        synchronized(lock) { core.flush(); core.nuevo(semilla(), _modo3d.value, _calendario.value) }
         _estado.value = core.publicar()
         _version.value++
         _mensaje.value = "Sorteo nuevo preparado: pulsa ▶"
     }
 
     fun limpiarMensaje() { _mensaje.value = null }
+
+    fun setCalendario(v: Boolean) {
+        _calendario.value = v
+        app.getSharedPreferences("bombos", Context.MODE_PRIVATE).edit().putBoolean("calendario2025", v).apply()
+        _mensaje.value = "Se aplicará al pulsar «Nuevo»"
+    }
 
     fun setModo3d(v: Boolean) {
         _modo3d.value = v

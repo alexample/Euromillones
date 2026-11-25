@@ -24,6 +24,7 @@ interface Bombo {
     fun add(bx: Float, by: Float, ident: Int, ux: Float = 0f, uy: Float = 0f)
     fun removeAt(i: Int): Int
     fun idAt(i: Int): Int
+    fun setId(i: Int, v: Int)
     fun isFree(bx: Float, by: Float): Boolean
     fun fillSettled(ids: IntArray, rnd: Random)
     fun lowest(): Int
@@ -123,6 +124,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
     }
 
     override fun idAt(i: Int) = id[i]
+    override fun setId(i: Int, v: Int) { id[i] = v }
     override fun isFree(bx: Float, by: Float) = true
 
     /**

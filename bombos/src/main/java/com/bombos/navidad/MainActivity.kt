@@ -253,6 +253,7 @@ private fun Escenario(e: Estado, running: Boolean, vel: Float, voz: Boolean, onV
             }
         }
         item { Fisica3D(e) }
+        item { Calendario(e) }
         item {
             Text("Bombo de premios: quedan", fontWeight = FontWeight.SemiBold)
             Text(Cat.entries.joinToString(" · ") { "${corto(it)} ${e.quedan[it.ordinal]}" }, style = MaterialTheme.typography.bodySmall)
@@ -270,6 +271,31 @@ private fun Escenario(e: Estado, running: Boolean, vel: Float, voz: Boolean, onV
                     "Semilla del azar: ${e.semilla.take(16)}… (rayos X del Sol, NOAA)",
                 style = MaterialTheme.typography.labelSmall,
             )
+        }
+    }
+}
+
+@Composable
+private fun Calendario(e: Estado) {
+    val on by Sorteo.calendario.collectAsState()
+    var ver by remember { mutableStateOf(false) }
+    Card {
+        Column(Modifier.padding(12.dp)) {
+            Text("Premios a la hora de 2025", fontWeight = FontWeight.Bold)
+            Text(
+                if (e.calendario) "Este sorteo saca cada premio mayor a la misma hora que en el sorteo real de 2025. " +
+                    "El número premiado es el que salga en ese momento del bombo grande."
+                else "Este sorteo usa el bombo de premios normal.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = on, onCheckedChange = Sorteo::setCalendario)
+                Text("  Usar las horas de 2025 en el próximo sorteo nuevo", style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = { ver = !ver }) { Text(if (ver) "Ocultar horas de 2025" else "Ver horas de 2025") }
+            if (ver) Calendario2025.HITOS.forEach { h ->
+                Text("${Calendario2025.hora(h.segundo)} · ${h.nota}", style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }

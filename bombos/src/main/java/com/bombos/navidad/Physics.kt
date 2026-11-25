@@ -77,6 +77,7 @@ class Drum(
 
     override fun clear() { n = 0; exited.clear() }
     override fun idAt(i: Int) = id[i]
+    override fun setId(i: Int, v: Int) { id[i] = v }
     override fun activo() = true
     override fun stepFor(dt: Float, budgetNs: Long): Float { step(dt, 48); return dt }
 
