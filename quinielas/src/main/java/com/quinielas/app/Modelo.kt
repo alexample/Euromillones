@@ -139,7 +139,7 @@ data class Pronostico(
  * llegó con ese mismo patrón a un partido en casa (o fuera) y se cuenta qué pasó después.
  */
 class Tendencias(ligas: List<Liga>) {
-    private class R(val fecha: String, val casa: Boolean, val res: Char)
+    private class R(val fecha: String, val casa: Boolean, val res: Char, val rival: String, val gf: Int, val gc: Int)
 
     private val serie = HashMap<String, MutableList<R>>()
     private val tabla = HashMap<String, IntArray>()   // "k|patrón|C/F" -> G, E, P
@@ -150,8 +150,8 @@ class Tendencias(ligas: List<Liga>) {
         for (m in ligas) {
             val rl = if (m.gl > m.gv) 'G' else if (m.gl == m.gv) 'E' else 'P'
             val rv = if (rl == 'G') 'P' else if (rl == 'P') 'G' else 'E'
-            serie.getOrPut(m.local) { ArrayList() } += R(m.fecha, true, rl)
-            serie.getOrPut(m.visit) { ArrayList() } += R(m.fecha, false, rv)
+            serie.getOrPut(m.local) { ArrayList() } += R(m.fecha, true, rl, m.visit, m.gl, m.gv)
+            serie.getOrPut(m.visit) { ArrayList() } += R(m.fecha, false, rv, m.local, m.gv, m.gl)
             base[if (rl == 'G') 0 else if (rl == 'E') 1 else 2]++
         }
         for ((_, s) in serie) {
@@ -166,6 +166,29 @@ class Tendencias(ligas: List<Liga>) {
                 }
             }
         }
+    }
+
+    /** Un caso histórico: un equipo que llegó con la misma racha, y qué hizo en el partido siguiente. */
+    data class Caso(val equipo: String, val fecha: String, val rival: String, val casa: Boolean, val gf: Int, val gc: Int, val res: Char)
+
+    /**
+     * Todos los equipos que llegaron con la racha [patron] a un partido en casa ([casa] = true) o fuera,
+     * del más reciente al más antiguo.
+     */
+    fun casos(patron: String, casa: Boolean, antesDe: String = "9999"): List<Caso> {
+        val k = patron.length
+        val out = ArrayList<Caso>()
+        for ((eq, s) in serie) {
+            for (i in k until s.size) {
+                val sig = s[i]
+                if (sig.casa != casa || sig.fecha >= antesDe) continue
+                var igual = true
+                for (j in 0 until k) if (s[i - k + j].res != patron[j]) { igual = false; break }
+                if (igual) out += Caso(eq, sig.fecha, sig.rival, sig.casa, sig.gf, sig.gc, sig.res)
+            }
+        }
+        out.sortByDescending { it.fecha }
+        return out
     }
 
     /** Últimos [k] resultados del equipo antes de [fecha] (más antiguo → más reciente). */

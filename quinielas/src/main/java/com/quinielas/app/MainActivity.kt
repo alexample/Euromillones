@@ -114,21 +114,23 @@ private fun App() {
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             TabRow(selectedTabIndex = tab) {
-                listOf("Jornada", "Generador", "Estadística", "Histórico").forEachIndexed { i, t ->
+                listOf("Generador", "Estadística", "Histórico").forEachIndexed { i, t ->
                     Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t, fontSize = 12.sp) })
                 }
             }
             val b = base
             if (b == null) { LinearProgressIndicator(Modifier.fillMaxWidth()); return@Column }
             if (sel.jornada < 0 || sel.jornada >= b.proximas.size) {
-                sel.jornada = b.proximas.indexOfFirst { it.pendiente }.takeIf { it >= 0 } ?: (b.proximas.size - 1)
+                // La siguiente jornada: la primera por jugar a partir de hoy
+                val hoy = java.time.LocalDate.now().toString()
+                sel.jornada = b.proximas.indexOfFirst { it.pendiente && it.fecha >= hoy }.takeIf { it >= 0 }
+                    ?: b.proximas.indexOfFirst { it.pendiente }.takeIf { it >= 0 } ?: (b.proximas.size - 1)
             }
             if (sel.mascaras == null) sel.mascaras = b.estadistica.masFrecuentes(sel.cobertura.toDouble())
             when (tab) {
-                0 -> JornadaVista(b, sel)
-                1 -> GeneradorVista(b, sel)
-                2 -> EstadisticaVista(b)
-                3 -> HistoricoVista(b)
+                0 -> GeneradorVista(b, sel)
+                1 -> EstadisticaVista(b)
+                2 -> HistoricoVista(b)
             }
         }
     }
@@ -149,25 +151,22 @@ private fun autoPermitidos(pr: List<Pronostico>, umbral: Float): IntArray = IntA
     m
 }
 
-@Composable
-private fun JornadaVista(b: Base, sel: Sel) {
-    if (b.proximas.isEmpty()) { Text("No hay jornadas publicadas.", Modifier.padding(16.dp)); return }
-    val prox = b.proximas[sel.jornada]
-    val pr = remember(prox, sel.k, b) { pronosticos(b, prox, sel.k) }
-    LaunchedEffect(pr, sel.umbral) { if (!sel.editado) sel.permitidos = autoPermitidos(pr, sel.umbral) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base, sel: Sel, prox: Prox, pr: List<Pronostico>) {
         item {
+            Text("Jornada", fontWeight = FontWeight.Bold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 b.proximas.forEachIndexed { i, x ->
                     FilterChip(selected = sel.jornada == i, onClick = { sel.jornada = i; sel.editado = false; sel.resultado = null },
                         label = { Text("Nº ${x.numero} · ${x.fecha.substring(8, 10)}/${x.fecha.substring(5, 7)}" + if (x.pendiente) "" else " ✓") })
                 }
             }
+            Text("Quiniela nº ${prox.numero}" + (prox.jornada?.let { " (jornada $it)" } ?: "") + " del ${prox.fecha.substring(8, 10)}/${prox.fecha.substring(5, 7)}" +
+                if (prox.pendiente) "" else " · ya jugada", style = MaterialTheme.typography.bodySmall)
         }
         item {
             Card {
                 Column(Modifier.padding(12.dp)) {
-                    Text("Tendencia por rachas", fontWeight = FontWeight.Bold)
+                    Text("Filtro por tendencia (rachas)", fontWeight = FontWeight.Bold)
                     Text("Patrón de los últimos ${sel.k} partidos de cada equipo (G gana, E empata, P pierde; el último a la derecha). " +
                         "Se buscan todos los equipos de 1ª y 2ª desde 2000 que llegaron con la misma racha a un partido en casa (o fuera) " +
                         "y se cuenta qué hicieron después. Si hay menos de 30 casos, el patrón se acorta.", style = MaterialTheme.typography.bodySmall)
@@ -197,6 +196,15 @@ private fun JornadaVista(b: Base, sel: Sel) {
                             style = MaterialTheme.typography.bodySmall)
                         p.siguienteLocal?.let { s -> Text("Tras «${p.formaLocal}» en casa: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
                         p.siguienteVisit?.let { s -> Text("Tras «${p.formaVisit}» fuera: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
+                        var ver by remember(p) { mutableStateOf(false) }
+                        if (p.formaLocal != null || p.formaVisit != null) TextButton(onClick = { ver = !ver }) {
+                            Text(if (ver) "Ocultar equipos con la misma racha" else "Ver equipos con la misma racha")
+                        }
+                        if (ver) {
+                            val f = x.fecha.take(10).ifEmpty { prox.fecha }
+                            p.formaLocal?.let { CasosLista(b, x.local, it, true, f) }
+                            p.formaVisit?.let { CasosLista(b, x.visit, it, false, f) }
+                        }
                     }
                     if (i < 14) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for (s in 0..2) {
@@ -210,6 +218,27 @@ private fun JornadaVista(b: Base, sel: Sel) {
                 }
             }
         }
+}
+
+/** Equipos que llegaron con la misma racha y qué hicieron en el partido siguiente. */
+@Composable
+private fun CasosLista(b: Base, equipo: String, patron: String, casa: Boolean, fecha: String) {
+    val casos = remember(patron, casa, fecha) { b.tendencias.casos(patron, casa, fecha) }
+    val g = casos.count { it.res == 'G' }; val e = casos.count { it.res == 'E' }; val pp = casos.count { it.res == 'P' }
+    val n = casos.size.coerceAtLeast(1)
+    Column(Modifier.fillMaxWidth().border(1.dp, Verde.copy(alpha = 0.4f), RoundedCornerShape(8.dp)).padding(8.dp)) {
+        Text("$equipo llega con ${patron.toCharArray().joinToString(" ")} ${if (casa) "y juega en casa" else "y juega fuera"}",
+            fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+        Text("${casos.size} veces un equipo de 1ª o 2ª llegó así ${if (casa) "a un partido en casa" else "a un partido fuera"}: " +
+            "ganó $g (${pct(g.toDouble() / n)}), empató $e (${pct(e.toDouble() / n)}), perdió $pp (${pct(pp.toDouble() / n)}).",
+            style = MaterialTheme.typography.bodySmall)
+        val porEquipo = casos.groupingBy { it.equipo }.eachCount().entries.sortedByDescending { it.value }.take(6)
+        if (porEquipo.isNotEmpty()) Text("Los que más veces: " + porEquipo.joinToString(", ") { "${it.key} (${it.value})" }, style = MaterialTheme.typography.labelSmall)
+        Text("Los más recientes:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+        casos.take(12).forEach { c ->
+            Text("${c.fecha.substring(8, 10)}/${c.fecha.substring(5, 7)}/${c.fecha.take(4)} · ${c.equipo} ${if (c.casa) "vs" else "en"} ${c.rival} ${c.gf}-${c.gc} → ${c.res}",
+                style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+        }
     }
 }
 
@@ -222,6 +251,8 @@ private fun GeneradorVista(b: Base, sel: Sel) {
     var calculando by remember { mutableStateOf(false) }
     val est = b.estadistica
     val prox = b.proximas.getOrNull(sel.jornada)
+    val pr = remember(prox, sel.k, b) { prox?.let { pronosticos(b, it, sel.k) }.orEmpty() }
+    LaunchedEffect(pr, sel.umbral) { if (!sel.editado) sel.permitidos = autoPermitidos(pr, sel.umbral) }
     val excel = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { uri ->
         val g = sel.resultado ?: return@rememberLauncherForActivityResult
         if (uri != null) scope.launch(Dispatchers.IO) {
@@ -238,6 +269,7 @@ private fun GeneradorVista(b: Base, sel: Sel) {
         }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (prox == null) item { Text("No hay jornadas publicadas todavía.") } else jornadaItems(b, sel, prox, pr)
         item {
             Card {
                 Column(Modifier.padding(12.dp)) {
@@ -261,9 +293,9 @@ private fun GeneradorVista(b: Base, sel: Sel) {
         item {
             Card {
                 Column(Modifier.padding(12.dp)) {
-                    Text("2 · Tendencia", fontWeight = FontWeight.Bold)
+                    Text("2 · Tendencia (arriba, partido a partido)", fontWeight = FontWeight.Bold)
                     val d = sel.permitidos.count { Integer.bitCount(it) == 2 }; val t = sel.permitidos.count { it == 7 }
-                    Text("Signos de cada partido elegidos en la pestaña Jornada: ${14 - d - t} fijos, $d dobles, $t triples " +
+                    Text("Signos elegidos: ${14 - d - t} fijos, $d dobles, $t triples " +
                         "(${miles(sel.permitidos.fold(1L) { a, m -> a * Integer.bitCount(m) })} columnas antes de las máscaras).",
                         style = MaterialTheme.typography.bodySmall)
                     Text("3 · Racha máxima de signos iguales seguidos", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
@@ -286,7 +318,6 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                     Button(enabled = !calculando && sel.mascaras.orEmpty().isNotEmpty(), onClick = {
                         calculando = true
                         scope.launch {
-                            val pr = prox?.let { pronosticos(b, it, sel.k) }.orEmpty()
                             val probs = Array(14) { i -> pr.getOrNull(i)?.p ?: doubleArrayOf(1 / 3.0, 1 / 3.0, 1 / 3.0) }
                             val ms = sel.mascaras.orEmpty()
                             val g = withContext(Dispatchers.Default) {
