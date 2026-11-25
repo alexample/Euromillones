@@ -258,7 +258,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
                         if (d2 < rr2 && d2 > 1e-14f) {
                             val d = sqrt(d2)
                             // Propagación del peso: la bola de arriba cede más que la de abajo (pilas estables)
-                            val share = if (mover) 0.5f + 0.5f * (ey / (rr * 0.5f)).coerceIn(-1f, 1f) else 0.5f
+                            val share = 0.5f
                             val corr = (rr - d) * share / d
                             sx += ex * corr; sy += ey * corr; sz += ez * corr
                             cnt++
@@ -267,7 +267,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
                     val f = if (cnt <= 1) 1f else 1f / sqrt(cnt.toFloat())
                     var cx = sx * f; var cy = sy * f; var cz = sz * f
                     val m2 = cx * cx + cy * cy + cz * cz
-                    val lim = ballR * 0.25f
+                    val lim = ballR * limCorr
                     if (m2 > lim * lim) { val k = lim / sqrt(m2); cx *= k; cy *= k; cz *= k }
                     dx[i] = cx; dy[i] = cy; dz[i] = cz
                 }
@@ -291,6 +291,10 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
 
     /** Pasadas de estabilización (propagación del peso de abajo arriba). */
     var estab = 0
+    /** Velocidad máxima de una bola (m/s): en el bombo una bola cae como mucho unos 0,5 m (≈3 m/s). */
+    var vMax = 3.5f
+    /** Corrección máxima por iteración (fracción del radio): limita la energía que meten los solapes. */
+    var limCorr = 0.25f
     /** Subpasos por segundo, iteraciones por subpaso y cada cuántos subpasos se recalculan las vecinas. */
     var hz = 480f
     var iters = 2
@@ -375,7 +379,7 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
                     }
                 }
                 val v2 = vx[i] * vx[i] + vy[i] * vy[i] + vz[i] * vz[i]
-                if (v2 > 36f) { val k = 6f / sqrt(v2); vx[i] *= k; vy[i] *= k; vz[i] *= k }
+                if (v2 > vMax * vMax) { val k = vMax / sqrt(v2); vx[i] *= k; vy[i] *= k; vz[i] *= k }
                 s += v2
             }
             acum.add(s.toDouble())
@@ -399,6 +403,22 @@ class Drum3D(override val radius: Float, capacity: Int, override val ballR: Floa
     }
 
     fun close() { team.close() }
+
+    fun escribir(o: java.io.DataOutputStream) {
+        o.writeInt(n)
+        for (k in 0 until n) { o.writeFloat(x[k]); o.writeFloat(y[k]); o.writeFloat(z[k]); o.writeInt(id[k]) }
+    }
+
+    /** Lee las bolas guardadas; solo se quedan las que siguen en el bombo ([valida]). */
+    fun leer(i: java.io.DataInputStream, valida: (Int) -> Boolean) {
+        clear()
+        val m = i.readInt()
+        ensure(m)
+        repeat(m) {
+            val bx = i.readFloat(); val by = i.readFloat(); val bz = i.readFloat(); val b = i.readInt()
+            if (valida(b)) add3(bx, by, bz, b)
+        }
+    }
 
     fun meanSpeed(): Float {
         if (n == 0) return 0f

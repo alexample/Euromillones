@@ -73,11 +73,32 @@ object Sorteo {
         _prueba.value = prefs.getString("prueba", null)
         synchronized(lock) {
             val c = db.enCurso()
-            if (c != null) core.retomar(c.first, c.second, c.third) else core.nuevo(semilla(), _modo3d.value)
+            if (c != null) {
+                val f = ficheroFisica()
+                val inp = if (c.third && f.exists()) runCatching { f.inputStream() }.getOrNull() else null
+                try { core.retomar(c.first, c.second, c.third, inp) } finally { inp?.close() }
+            } else core.nuevo(semilla(), _modo3d.value)
             _estado.value = core.publicar()
             frame = core.frame()
         }
         startLoop()
+    }
+
+    private fun ficheroFisica() = java.io.File(app.filesDir, "fisica3d.bin")
+
+    /** Guarda dónde está cada bola del modo 3D (se llama al pausar y al terminar cada alambre). */
+    private fun guardarFisica() {
+        val bytes = synchronized(lock) {
+            val b = java.io.ByteArrayOutputStream(1 shl 21)
+            if (core.guardarFisica(b)) b.toByteArray() else null
+        } ?: return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val tmp = java.io.File(app.filesDir, "fisica3d.tmp")
+                tmp.writeBytes(bytes)
+                tmp.renameTo(ficheroFisica())
+            }
+        }
     }
 
     private fun semilla() = SolarEntropy.status.value.seed?.hex ?: "azar-local"
@@ -115,6 +136,7 @@ object Sorteo {
                     pub = now
                     val e = synchronized(lock) { core.publicar() }
                     if (e.extraidas != _estado.value.extraidas || e.fase != _estado.value.fase) _version.value++
+                    if (e.modo3d && e.alambre != _estado.value.alambre) guardarFisica()
                     _estado.value = e
                 }
                 delay(16)
@@ -131,6 +153,7 @@ object Sorteo {
     fun pausar() {
         _running.value = false
         synchronized(lock) { core.flush() }
+        guardarFisica()
         SorteoService.stop(app)
     }
 

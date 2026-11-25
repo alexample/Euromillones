@@ -248,7 +248,7 @@ class Drum(
             }
             // límite de velocidad (estabilidad numérica)
             val v2 = vx[i] * vx[i] + vy[i] * vy[i]
-            val vmax = 6f
+            val vmax = 3.5f
             if (v2 > vmax * vmax) { val f = vmax / sqrt(v2); vx[i] *= f; vy[i] *= f }
             i++
         }

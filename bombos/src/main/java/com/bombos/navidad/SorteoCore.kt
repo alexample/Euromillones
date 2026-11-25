@@ -245,7 +245,7 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
     }
 
     /** Retoma un sorteo a medias (después de cerrar la app). */
-    fun retomar(id: Long, fase: String, tresD: Boolean = false) {
+    fun retomar(id: Long, fase: String, tresD: Boolean = false, fisicaGuardada: java.io.InputStream? = null) {
         crearBombos(tresD)
         reset()
         val hechas = store.extracciones(id).sortedBy { it.orden }
@@ -273,9 +273,15 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
         val reloj = last?.t ?: hora(year, 12, 21, 10, 0)
         estado = estado.copy(sorteo = id, reloj = reloj, modo3d = tresD)
         if (hechas.isNotEmpty() || f.ordinal >= Fase.EXTRACCION.ordinal) {
-            llenarAsentados()
+            // En 3D se recupera la posición exacta de cada bola; si no se puede, se colocan mezcladas
+            val ok = num.es3D && fisicaGuardada != null && runCatching { cargarFisica(id, fisicaGuardada) }.getOrDefault(false)
+            if (!ok) llenarMezclados()
             if (quedanPremios.isEmpty()) entrar(Fase.FIN)
-            else { entrar(Fase.EXTRACCION); paso = if (last == null) Paso.MEZCLA else Paso.INSERTA; restante = if (last == null) T_MEZCLA else 0.0; if (last == null) arrancar() }
+            else {
+                entrar(Fase.EXTRACCION)
+                if (last != null && last.pos >= POR_ALAMBRE) { paso = Paso.INSERTA; restante = 0.0 }
+                else { paso = Paso.MEZCLA; restante = T_MEZCLA; arrancar() }   // al retomar, los bombos giran antes de seguir
+            }
         } else {
             entrar(if (f.ordinal >= Fase.CARGA.ordinal) Fase.CARGA else f)
         }
@@ -305,6 +311,41 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
             if (quedan[half + i]) out[k++] = half + i
         }
         return out
+    }
+
+    /** Para retomar sin estado guardado: bolas colocadas en orden aleatorio (bombo ya mezclado). */
+    private fun llenarMezclados() {
+        val r = rnd()
+        pre.fillSettled(quedanPremios.shuffled(r).toIntArray(), r)
+        if (num.es3D) { val a = ordenTolvas(); for (i in a.size - 1 downTo 1) { val j = r.nextInt(i + 1); val t = a[i]; a[i] = a[j]; a[j] = t }; num.fillSettled(a, r) }
+        else num.fillSettled(IntArray(objetivoVisibles()) { -1 }, r)
+    }
+
+    /** Guarda la posición de todas las bolas del modo 3D (para retomar tal cual tras cerrar la app). */
+    fun guardarFisica(out: java.io.OutputStream): Boolean {
+        val a = num as? Drum3D ?: return false
+        val b = pre as? Drum3D ?: return false
+        val o = java.io.DataOutputStream(java.io.BufferedOutputStream(out, 1 shl 16))
+        o.writeInt(0x424F4D42); o.writeLong(estado.sorteo); o.writeInt(extraidas)
+        o.writeFloat(a.angle); o.writeFloat(b.angle)
+        a.escribir(o); b.escribir(o)
+        o.flush()
+        return true
+    }
+
+    private fun cargarFisica(id: Long, inp: java.io.InputStream): Boolean {
+        val a = num as? Drum3D ?: return false
+        val b = pre as? Drum3D ?: return false
+        val i = java.io.DataInputStream(java.io.BufferedInputStream(inp, 1 shl 16))
+        if (i.readInt() != 0x424F4D42 || i.readLong() != id) return false
+        i.readInt()
+        a.angle = i.readFloat(); b.angle = i.readFloat()
+        val premios = HashSet(quedanPremios)
+        a.leer(i) { v -> v in 0 until NUMEROS && posPool[v] < poolN && pool[posPool[v]] == v }
+        b.leer(i) { v -> v in premios }
+        // Si falta alguna bola (se guardó antes de las últimas extracciones no pasa: solo sobran), se añade
+        if (a.n < poolN || b.n < quedanPremios.size) return false
+        return true
     }
 
     private fun objetivoVisibles() = if (num.es3D) poolN else ceil(poolN.toDouble() * NUM_VISIBLES / NUMEROS).toInt()
@@ -458,7 +499,8 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
             left -= use
             if (restante <= 1e-9) terminarPaso()
         }
-        if (fly >= 0) { fly += dt / T_FLY; if (fly > 1) fly = -1.0 }
+        // (la bajada por la trompeta hasta la copa no se simula: la bola aparece directamente en la copa)
+        fly = -1.0
         if (estado.fase == Fase.CARGA && fisicaDt > 0f && !num.es3D) verter(fisicaDt)
         if (fisicaDt > 0f && !fisicaHecha) {
             num.stepFor(fisicaDt, presupuesto)
@@ -571,7 +613,8 @@ class SorteoCore(private val store: Store, private val rnd: () -> Random) {
             // Mantiene la proporción de bolas visibles
             if (!num.es3D && num.n < objetivoVisibles()) {
                 val r = rnd()
-                num.add((r.nextFloat() - 0.5f) * numR * 0.4f, numR * 0.6f, -1)
+                // La bola visible vuelve al hueco que acaba de dejar (cada bola dibujada representa ~40 reales)
+                num.add((r.nextFloat() - 0.5f) * num.ballR * 0.2f, -(numR - num.ballR * 1.05f), -1)
             }
             fly = 0.0
         }
