@@ -8,14 +8,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-          R="https://www.loteriasyapuestas.es/es/la-quiniela"
-          H=$(date -u +%Y%m%d); F=$(date -u -d '+60 days' +%Y%m%d)
-          for u in \
-            "https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAQU&celebrados=false&fechaInicioInclusiva=$H&fechaFinInclusiva=$F" \
-            "https://www.loteriasyapuestas.es/servicios/proximosv3?game_id=LAQU&num=3" \
-            "https://www.loteriasyapuestas.es/servicios/proximosv3?game_id=LAQU" \
-            "https://www.loteriasyapuestas.es/servicios/proximos?game_id=LAQU&num=3" \
-            "https://www.loteriasyapuestas.es/servicios/fechav3?game_id=LAQU" \
-            "https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAQU&celebrados=false" ; do
-            echo "=== $u"; curl -s -m 30 -A "$UA" -e "$R" "$u" | head -c 3000; echo; done
+          cat > s.py <<'PY'
+          import urllib.request, datetime
+          H = {"User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36",
+               "Accept": "application/json, text/plain, */*", "Referer": "https://www.loteriasyapuestas.es/es/resultados/quiniela"}
+          h = datetime.date.today(); f = h + datetime.timedelta(days=60)
+          B = "https://www.loteriasyapuestas.es/servicios/"
+          for u in [f"buscadorSorteos?game_id=LAQU&celebrados=false&fechaInicioInclusiva={h:%Y%m%d}&fechaFinInclusiva={f:%Y%m%d}",
+                    "proximosv3?game_id=LAQU&num=3", "proximosv3?game_id=LAQU", "proximos?game_id=LAQU&num=3",
+                    "fechav3?game_id=LAQU", "proximosv3?game_id=LAQU&num=1", "boletov3?game_id=LAQU",
+                    "jornadasLAQU", "proximasJornadas?game_id=LAQU"]:
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(B + u, headers=H), timeout=40) as r:
+                      t = r.read().decode("utf-8-sig", "replace")
+              except Exception as e: t = "ERR " + str(e)
+              print("===", u); print(t[:2500])
+          PY
+          python3 s.py
