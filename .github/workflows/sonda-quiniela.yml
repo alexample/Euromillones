@@ -14,10 +14,12 @@ jobs:
                "Accept": "application/json, text/plain, */*", "Referer": "https://www.loteriasyapuestas.es/es/resultados/quiniela"}
           h = datetime.date.today(); f = h + datetime.timedelta(days=60)
           B = "https://www.loteriasyapuestas.es/servicios/"
-          for u in [f"buscadorSorteos?game_id=LAQU&celebrados=false&fechaInicioInclusiva={h:%Y%m%d}&fechaFinInclusiva={f:%Y%m%d}",
-                    "proximosv3?game_id=LAQU&num=3", "proximosv3?game_id=LAQU", "proximos?game_id=LAQU&num=3",
-                    "fechav3?game_id=LAQU", "proximosv3?game_id=LAQU&num=1", "boletov3?game_id=LAQU",
-                    "jornadasLAQU", "proximasJornadas?game_id=LAQU"]:
+          for u in ["fechav3?game_id=LAQU&fecha_sorteo=20261129", "fechav3?game_id=LAQU&fecha_sorteo=20261129&num=1",
+                    "buscadorSorteos?game_id=LAQU&celebrados=false&fechaInicioInclusiva=20261129&fechaFinInclusiva=20261129",
+                    "buscadorSorteos?game_id=LAQU&celebrados=true&fechaInicioInclusiva=20261129&fechaFinInclusiva=20261129",
+                    "partidosv3?id_sorteo=1330106070", "partidos?id_sorteo=1330106070", "detallev3?id_sorteo=1330106070",
+                    "sorteov3?id_sorteo=1330106070", "quinielaPartidos?id_sorteo=1330106070", "partidosQuinielav3?id_sorteo=1330106070",
+                    "fechav3?game_id=LAQU&fecha_sorteo=20261125"]:
               try:
                   with urllib.request.urlopen(urllib.request.Request(B + u, headers=H), timeout=40) as r:
                       t = r.read().decode("utf-8-sig", "replace")
