@@ -116,6 +116,32 @@ for s in arr if isinstance(arr, list) else []:
     if partidos:
         proximas.append({"f": s["fecha_sorteo"][:10], "n": s.get("numero"), "j": s.get("jornada"), "t": s.get("temporada"),
                          "partidos": partidos})
+
+# El buscador no devuelve las jornadas abiertas (aún sin jugar): se piden aparte con proximosv3 y fechav3,
+# que además traen los resultados al momento de las jornadas a medio jugar.
+B = "https://www.loteriasyapuestas.es/servicios/"
+def fechav3(f):
+    try: a = json.loads(get(B + "fechav3?game_id=LAQU&fecha_sorteo=" + f.replace("-", "")) or "[]")
+    except Exception: return None
+    return a[0] if isinstance(a, list) and a and a[0].get("partidos") else None
+
+try: prox_v3 = json.loads(get(B + "proximosv3?game_id=LAQU&num=4") or "[]")
+except Exception: prox_v3 = []
+fechas = {p["f"] for p in proximas if any(not x["marcador"] for x in p["partidos"])}
+fechas |= {x["fecha"][:10] for x in prox_v3 if isinstance(x, dict) and x.get("fecha")}
+for f in sorted(fechas):
+    s = fechav3(f)
+    if not s: continue
+    previa = next((p for p in proximas if p["f"] == f), None)
+    partidos = []
+    for k, p in enumerate(s["partidos"]):
+        antes = previa["partidos"][k] if previa and k < len(previa["partidos"]) else {}
+        partidos.append({"pos": k + 1, "local": limpia(p.get("local")), "visitante": limpia(p.get("visitante")),
+                         "signo": (p.get("signo") or "").strip(), "marcador": (p.get("marcador") or "").strip(),
+                         "fecha": (p.get("fecha") or "").replace("\\/", "-").replace("/", "-") or antes.get("fecha", "")})
+    nueva = {"f": f, "n": int(str(s.get("id_sorteo", "0"))[-3:]), "j": s.get("jornada"), "t": s.get("temporada"), "partidos": partidos}
+    if previa: proximas[proximas.index(previa)] = nueva
+    else: proximas.append(nueva)
 proximas.sort(key=lambda x: x["f"])
 print("próximas:", [(p["n"], p["f"]) for p in proximas])
 
