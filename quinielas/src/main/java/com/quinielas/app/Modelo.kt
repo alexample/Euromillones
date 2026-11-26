@@ -273,7 +273,26 @@ class Generacion(
     val total: Long,             // columnas que cumplen todos los filtros
     val probAcierto: Double,     // probabilidad (según el modelo) de que la ganadora esté entre las elegidas
     val coberturaHist: Double,   // % de quinielas históricas cuya máscara estaba permitida
-)
+    /** Columnas elegidas antes del biorritmo (si se aplicó); null si no se aplicó. */
+    val antesBio: Int? = null,
+    /** Columnas quitadas por el biorritmo en cada partido (posición → nº). */
+    val quitadasBio: IntArray = IntArray(14),
+) {
+    /**
+     * Biorritmo sobre las columnas que ya han pasado máscaras, rachas y probabilidad: se quita cada columna que
+     * da la victoria a un equipo claramente «bajo» ([vetados]: bits de signos vetados por partido).
+     */
+    fun conBiorritmo(vetados: IntArray, probs: Array<DoubleArray>): Generacion {
+        val q = IntArray(14)
+        val quedan = columnas.filter { c ->
+            var ok = true; var cc = c
+            for (i in 0 until 14) { val sg = cc % 3; cc /= 3; if (vetados[i] and (1 shl sg) != 0) { q[i]++; ok = false } }
+            ok
+        }.toIntArray()
+        val p = quedan.sumOf { c -> var cc = c; var x = 1.0; for (i in 0 until 14) { x *= probs[i][cc % 3]; cc /= 3 }; x }
+        return Generacion(quedan, porMascara, total, p, coberturaHist, columnas.size, q)
+    }
+}
 
 object Generador {
     fun signo(col: Int, pos: Int): Char { var c = col; repeat(pos) { c /= 3 }; return SIGNOS[c % 3] }

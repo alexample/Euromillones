@@ -172,6 +172,14 @@ private fun biorritmos(b: Base, p: Prox): List<Pair<Bio?, Bio?>> = p.partidos.ma
     b.plantillas.de(x.local)?.let { Biorritmo.equipo(it, dia) } to b.plantillas.de(x.visit)?.let { Biorritmo.equipo(it, dia) }
 }
 
+/** Signos que veta el biorritmo en cada partido: la victoria del equipo claramente «bajo». */
+private fun vetosBio(bios: List<Pair<Bio?, Bio?>>, umbral: Float): IntArray = IntArray(14) { i ->
+    val (l, v) = bios.getOrNull(i) ?: return@IntArray 0
+    if (l == null || v == null) return@IntArray 0
+    val d = l.media - v.media
+    if (d >= umbral) 1 shl 2 else if (d <= -umbral) 1 else 0
+}
+
 /** Filtro biorritmo: si un equipo está claramente por debajo del otro, se quita el signo que le da la victoria. */
 private fun conBiorritmo(perm: IntArray, bios: List<Pair<Bio?, Bio?>>, umbral: Float): IntArray = IntArray(14) { i ->
     val (l, v) = bios.getOrNull(i) ?: return@IntArray perm[i]
@@ -299,7 +307,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
                             if (bio != null && (bio.first != null || bio.second != null)) Text(
                                 "Biorritmo: local ${bioTxt(bio.first)} · visitante ${bioTxt(bio.second)}" +
                                     if (sel.bio && bio.first != null && bio.second != null && kotlin.math.abs(bio.first!!.media - bio.second!!.media) >= sel.bioUmbral)
-                                        (if (bio.first!!.media > bio.second!!.media) "  → filtro quita el 2" else "  → filtro quita el 1") else "",
+                                        (if (bio.first!!.media > bio.second!!.media) "  → quita las columnas con 2" else "  → quita las columnas con 1") else "",
                                 style = MaterialTheme.typography.labelSmall)
                             p.siguienteLocal?.let { s -> Text("Tras «${p.formaLocal}» en casa: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
                             p.siguienteVisit?.let { s -> Text("Tras «${p.formaVisit}» fuera: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
@@ -423,10 +431,10 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                         Text("  Aplicar filtro biorritmo · umbral ${"%.2f".format(sel.bioUmbral)}", style = MaterialTheme.typography.bodySmall)
                     }
                     if (sel.bio) Slider(value = sel.bioUmbral, onValueChange = { sel.bioUmbral = it; sel.resultado = null }, valueRange = 0.05f..0.8f)
-                    val antes = sel.permitidos.fold(1L) { a, m -> a * Integer.bitCount(m) }
-                    val despues = efectivos.fold(1L) { a, m -> a * Integer.bitCount(m) }
-                    if (sel.bio) Text("Con el biorritmo: ${miles(antes)} → ${miles(despues)} columnas antes de las máscaras " +
-                        "(${bios.count { it.first != null && it.second != null }} partidos con datos de los dos equipos).",
+                    if (sel.bio) Text("El biorritmo se aplica al final: de las columnas elegidas por máscaras, rachas y probabilidad " +
+                        "quita las que dan la victoria al equipo «bajo» (${vetosBio(bios, sel.bioUmbral).count { it != 0 }} partidos afectados de " +
+                        "${bios.count { it.first != null && it.second != null }} con datos). Si quieres que cuente desde el principio, " +
+                        "tacha tú esos signos arriba.",
                         style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     Text("3 · Racha máxima de signos iguales seguidos", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -464,9 +472,11 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                             val probs = Array(14) { i -> pr.getOrNull(i)?.p ?: doubleArrayOf(1 / 3.0, 1 / 3.0, 1 / 3.0) }
                             val ms = sel.mascaras.orEmpty()
                             val g = withContext(Dispatchers.Default) {
-                                Generador.generar(efectivos, ms, sel.racha, probs,
+                                val g0 = Generador.generar(sel.permitidos, ms, sel.racha, probs,
                                     if (sel.modo == Generador.Modo.POR_MASCARA) sel.porMascara else sel.tope, sel.modo, SolarEntropy.random(),
                                     Generador.aciertosHistoricos(b.quinielas, ms, sel.racha))
+                                // El biorritmo actúa al final, sobre las columnas que ya han pasado máscaras, rachas y probabilidad
+                                if (sel.bio) g0.conBiorritmo(vetosBio(bios, sel.bioUmbral), probs) else g0
                             }
                             sel.resultado = g; calculando = false
                         }
@@ -479,7 +489,15 @@ private fun GeneradorVista(b: Base, sel: Sel) {
             item {
                 Card {
                     Column(Modifier.padding(12.dp)) {
-                        Text("${miles(g.total)} columnas cumplen todo · elegidas ${miles(g.columnas.size.toLong())}", fontWeight = FontWeight.Bold)
+                        Text("${miles(g.total)} columnas cumplen máscaras y rachas · elegidas ${miles((g.antesBio ?: g.columnas.size).toLong())}" +
+                            (g.antesBio?.let { " · tras el biorritmo quedan ${miles(g.columnas.size.toLong())}" } ?: ""), fontWeight = FontWeight.Bold)
+                        g.antesBio?.let { a ->
+                            val q = (0 until 14).filter { g.quitadasBio[it] > 0 }
+                            Text(if (q.isEmpty()) "El biorritmo no quitó ninguna columna." else
+                                "Biorritmo: quita ${miles((a - g.columnas.size).toLong())} de ${miles(a.toLong())} (${pct((a - g.columnas.size).toDouble() / a.coerceAtLeast(1))}). " +
+                                    "Por partido: " + q.joinToString(", ") { "${it + 1}: ${g.quitadasBio[it]}" },
+                                style = MaterialTheme.typography.bodySmall)
+                        }
                         val apuestas = g.columnas.size.coerceAtLeast(2)
                         Text("Coste: ${dec(apuestas * Generador.PRECIO)} € (${Generador.PRECIO} € por apuesta; mínimo 2 apuestas)", style = MaterialTheme.typography.bodySmall)
                         Text("Probabilidad de 14 aciertos según el modelo: ${if (g.probAcierto < 0.0001) "%.2e".format(g.probAcierto) else dec(g.probAcierto * 100, 3) + " %"}",
