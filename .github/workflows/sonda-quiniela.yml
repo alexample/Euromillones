@@ -1,0 +1,21 @@
+name: Sonda quiniela
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/sonda-quiniela.yml"]
+jobs:
+  s:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          R="https://www.loteriasyapuestas.es/es/la-quiniela"
+          H=$(date -u +%Y%m%d); F=$(date -u -d '+60 days' +%Y%m%d)
+          for u in \
+            "https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAQU&celebrados=false&fechaInicioInclusiva=$H&fechaFinInclusiva=$F" \
+            "https://www.loteriasyapuestas.es/servicios/proximosv3?game_id=LAQU&num=3" \
+            "https://www.loteriasyapuestas.es/servicios/proximosv3?game_id=LAQU" \
+            "https://www.loteriasyapuestas.es/servicios/proximos?game_id=LAQU&num=3" \
+            "https://www.loteriasyapuestas.es/servicios/fechav3?game_id=LAQU" \
+            "https://www.loteriasyapuestas.es/servicios/buscadorSorteos?game_id=LAQU&celebrados=false" ; do
+            echo "=== $u"; curl -s -m 30 -A "$UA" -e "$R" "$u" | head -c 3000; echo; done
