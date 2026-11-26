@@ -1,0 +1,37 @@
+name: Datos fuentes
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/datos-fuentes.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fuentes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar fuentes libres (Google Fonts, licencias OFL/Apache)
+        run: |
+          set -e
+          D=quinielas/src/main/res/font
+          mkdir -p $D
+          B=https://raw.githubusercontent.com/google/fonts/main
+          curl -fsSL $B/apache/specialelite/SpecialElite-Regular.ttf -o $D/maquina.ttf
+          curl -fsSL $B/ofl/fjallaone/FjallaOne-Regular.ttf -o $D/imprenta.ttf
+          curl -fsSL $B/ofl/pragatinarrow/PragatiNarrow-Regular.ttf -o $D/estrecha.ttf
+          curl -fsSL $B/ofl/pragatinarrow/PragatiNarrow-Bold.ttf -o $D/estrecha_negrita.ttf
+          curl -fsSL $B/ofl/reeniebeanie/ReenieBeanie-Regular.ttf -o $D/lapiz.ttf
+          ls -la $D
+          file $D/*
+      - name: Guardar
+        run: |
+          git add quinielas/src/main/res/font
+          if git diff --cached --quiet; then echo "Sin cambios"; else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Fuentes para la app Quinielas (Special Elite, Fjalla One, Pragati Narrow, Reenie Beanie)"
+            git pull --rebase && git push
+          fi
