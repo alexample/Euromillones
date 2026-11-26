@@ -326,11 +326,24 @@ object Generador {
         val grupoTotal = HashMap<Int, Long>()
         fun pushGrupo(code: Int, col: Int, sc: Double) {
             grupoTotal[code] = (grupoTotal[code] ?: 0L) + 1
-            val cs = grupoCol.getOrPut(code) { IntArray(tope) }; val ss = grupoSc.getOrPut(code) { DoubleArray(tope) }
-            val n = grupoN[code] ?: 0
-            if (n < tope) { cs[n] = col; ss[n] = sc; grupoN[code] = n + 1; return }
-            var mi = 0; for (i in 1 until n) if (ss[i] < ss[mi]) mi = i
-            if (sc > ss[mi]) { cs[mi] = col; ss[mi] = sc }
+            val cs = grupoCol.getOrPut(code) { IntArray(minOf(tope, 1024)) }; val ss = grupoSc.getOrPut(code) { DoubleArray(minOf(tope, 1024)) }
+            var n = grupoN[code] ?: 0
+            // montículo mínimo por grupo (crece hasta [tope])
+            if (n < tope) {
+                var a = cs; var b = ss
+                if (n == a.size) { a = a.copyOf(minOf(tope, n * 2)); b = b.copyOf(a.size); grupoCol[code] = a; grupoSc[code] = b }
+                var i = n++; a[i] = col; b[i] = sc; grupoN[code] = n
+                while (i > 0) { val p = (i - 1) / 2; if (b[p] <= b[i]) break
+                    val tc = a[p]; a[p] = a[i]; a[i] = tc; val ts = b[p]; b[p] = b[i]; b[i] = ts; i = p }
+                return
+            }
+            if (sc <= ss[0]) return
+            cs[0] = col; ss[0] = sc
+            var i = 0
+            while (true) { val l = 2 * i + 1; val r = l + 1; var m = i
+                if (l < n && ss[l] < ss[m]) m = l; if (r < n && ss[r] < ss[m]) m = r
+                if (m == i) break
+                val tc = cs[m]; cs[m] = cs[i]; cs[i] = tc; val ts = ss[m]; ss[m] = ss[i]; ss[i] = ts; i = m }
         }
         val pow3 = IntArray(14).also { it[0] = 1; for (i in 1 until 14) it[i] = it[i - 1] * 3 }
 

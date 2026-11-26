@@ -191,6 +191,8 @@ private fun conBiorritmo(perm: IntArray, bios: List<Pair<Bio?, Bio?>>, umbral: F
     if (m == 0) perm[i] else m
 }
 
+private const val TODAS_MASCARA = 20_000
+
 private val Rojo = androidx.compose.ui.graphics.Color(0xFFC8231E)
 
 private fun rachaMax(t: String): Int { var m = 0; var r = 0; var prev = ' '; for (c in t) { r = if (c == prev) r + 1 else 1; prev = c; if (r > m) m = r }; return m }
@@ -454,11 +456,14 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                         label = { Text("Las más probables de cada máscara") })
                     if (sel.modo == Generador.Modo.POR_MASCARA) {
                         Text("Para cada máscara elegida, las columnas con más probabilidad según rachas (y biorritmo): " +
-                            "${sel.porMascara} por máscara × ${sel.mascaras.orEmpty().size} máscaras = ${sel.porMascara * sel.mascaras.orEmpty().size} columnas como máximo.",
+                            if (sel.porMascara == 0) "Todas las columnas de cada máscara que pasan los filtros (hasta ${miles(TODAS_MASCARA.toLong())} por máscara): " +
+                                "cada casilla que quites reduce el número." else
+                            "${sel.porMascara} por máscara × ${sel.mascaras.orEmpty().size} máscaras = ${sel.porMascara * sel.mascaras.orEmpty().size} columnas como máximo. " +
+                                "Es un tope: mientras los filtros dejen más, salen siempre esas; para ver cómo reduce cada casilla elige «Todas».",
                             style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf(1, 2, 3, 5, 10, 25).forEach { n ->
-                                FilterChip(selected = sel.porMascara == n, onClick = { sel.porMascara = n; sel.resultado = null }, label = { Text("$n") })
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf(1, 2, 3, 5, 10, 25, 0).forEach { n ->
+                                FilterChip(selected = sel.porMascara == n, onClick = { sel.porMascara = n; sel.resultado = null }, label = { Text(if (n == 0) "Todas" else "$n") })
                             }
                         }
                     }
@@ -473,7 +478,7 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                             val ms = sel.mascaras.orEmpty()
                             val g = withContext(Dispatchers.Default) {
                                 val g0 = Generador.generar(sel.permitidos, ms, sel.racha, probs,
-                                    if (sel.modo == Generador.Modo.POR_MASCARA) sel.porMascara else sel.tope, sel.modo, SolarEntropy.random(),
+                                    if (sel.modo == Generador.Modo.POR_MASCARA) (if (sel.porMascara == 0) TODAS_MASCARA else sel.porMascara) else sel.tope, sel.modo, SolarEntropy.random(),
                                     Generador.aciertosHistoricos(b.quinielas, ms, sel.racha))
                                 // El biorritmo actúa al final, sobre las columnas que ya han pasado máscaras, rachas y probabilidad
                                 if (sel.bio) g0.conBiorritmo(vetosBio(bios, sel.bioUmbral), probs) else g0
