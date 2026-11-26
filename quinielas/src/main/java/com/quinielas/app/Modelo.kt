@@ -21,7 +21,24 @@ data class PartidoProx(val pos: Int, val local: String, val visit: String, val s
 
 data class Prox(val fecha: String, val numero: Int, val jornada: Int?, val partidos: List<PartidoProx>) {
     val pendiente: Boolean get() = partidos.any { it.marcador.isBlank() }
+    /** Signos reales de los 14 partidos (' ' si aún no se ha jugado). */
+    val real: String get() = String(CharArray(14) { i ->
+        val x = partidos.getOrNull(i); val c = x?.signo?.trim()?.uppercase()?.firstOrNull()
+        if (x != null && x.marcador.isNotBlank() && c != null && c in SIGNOS) c else ' '
+    })
 }
+
+/** Escrutinio de unas columnas contra el resultado real. */
+class Escrutinio(real: String, columnas: List<String>) {
+    val jugados = real.count { it != ' ' }
+    val aciertos: IntArray = IntArray(columnas.size) { n -> columnas[n].indices.count { i -> real.getOrNull(i)?.let { it != ' ' && it == columnas[n][i] } == true } }
+    /** reparto[k] = columnas con k aciertos. */
+    val reparto: IntArray = IntArray(15).also { r -> aciertos.forEach { r[it]++ } }
+    val mejor: Int = aciertos.maxOrNull() ?: 0
+    /** Categorías de premio actuales (14, 13, 12, 11, 10). */
+    val premiadas: Int = (10..14).sumOf { reparto[it] }
+}
+
 
 const val SIGNOS = "1X2"
 

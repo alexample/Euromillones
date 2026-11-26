@@ -167,12 +167,12 @@ object Texturas {
 @Composable
 fun Boleto(
     numero: Int, primera: Int, partidos: List<PartidoProx>, columnas: List<Int>, jornada: Int?,
-    fecha: String = "", margen: String? = null,
+    fecha: String = "", margen: String? = null, real: String? = null,
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val datos = remember(numero, columnas, partidos, margen) {
+    val datos = remember(numero, columnas, partidos, margen, real) {
         DatosBoleto(numero, primera, partidos.take(14).map { it.local to it.visit }, partidos.getOrNull(14)?.let { it.local to it.visit },
-            columnas.map { Generador.texto(it) }, jornada, fecha, margen)
+            columnas.map { Generador.texto(it) }, jornada, fecha, margen, real)
     }
     androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().aspectRatio(Boleto80.ANCHO / Boleto80.ALTO)) {
         drawIntoCanvas { c ->

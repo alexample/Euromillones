@@ -16,6 +16,8 @@ import java.net.URL
 class Base(
     val quinielas: List<Quiniela>, val ligas: List<Liga>, val proximas: List<Prox>, val actualizado: String,
     mapa: Map<String, String>, val plantillas: Plantillas,
+    /** Quinielas ya jugadas (las más recientes primero) para probar los filtros contra el resultado real. */
+    val anteriores: List<Prox> = emptyList(),
 ) {
     val estadistica = Estadistica(quinielas)
     val tendencias = Tendencias(ligas)
@@ -54,12 +56,20 @@ object Datos {
             return if (local.exists() && local.length() > 10) local.readText() else ctx.assets.open(f).bufferedReader().readText()
         }
         val b = runCatching {
+            val ant = ArrayList<Prox>()
             val q = JSONArray(leer("quinielas.json")).let { a ->
                 List(a.length()) { i ->
                     val o = a.getJSONObject(i)
                     val e = o.optJSONArray("e")
                     val partidos = if (e == null) emptyList() else List(e.length()) { k -> val p = e.getJSONArray(k); p.optString(0) to p.optString(1) }
-                    Quiniela(o.getString("f"), o.optInt("n"), o.optString("t").ifEmpty { null }, o.getString("s"), o.optString("p15"), partidos)
+                    val sg = o.getString("s")
+                    if (e != null && e.length() >= 14 && sg.length == 14) ant += Prox(o.getString("f"), o.optInt("n"),
+                        o.optString("j").toIntOrNull(), List(e.length()) { k ->
+                            val x = e.getJSONArray(k)
+                            PartidoProx(k + 1, x.optString(0), x.optString(1), if (k < 14) sg[k].toString() else o.optString("p15"),
+                                x.optString(2).ifBlank { "-" }, x.optString(3))
+                        })
+                    Quiniela(o.getString("f"), o.optInt("n"), o.optString("t").ifEmpty { null }, sg, o.optString("p15"), partidos)
                 }
             }
             val l = JSONArray(leer("ligas.json")).let { a ->
@@ -88,7 +98,7 @@ object Datos {
                     })
                 }.toList()
             }.orEmpty()
-            Base(q, l, prox, j.optString("actualizado"), eq, Plantillas(pl))
+            Base(q, l, prox, j.optString("actualizado"), eq, Plantillas(pl), ant.sortedByDescending { it.fecha }.take(120))
         }
         b.onSuccess { _base.value = it }.onFailure { _estado.value = "Error leyendo los datos: ${it.message}" }
     }

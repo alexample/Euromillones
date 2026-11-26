@@ -56,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -84,6 +85,8 @@ private class Sel {
     var jornada by mutableIntStateOf(-1)
     var vista: Base? = null          // base sobre la que se eligió la jornada
     var manual: Int? = null          // nº de quiniela elegido a mano
+    var pasada by mutableStateOf<Prox?>(null)   // quiniela ya jugada elegida para probar los filtros
+    var verAnteriores by mutableStateOf(false)
     var k by mutableIntStateOf(7)
     var umbral by mutableFloatStateOf(20f)
     var permitidos by mutableStateOf(IntArray(14) { 7 })
@@ -180,6 +183,10 @@ private fun conBiorritmo(perm: IntArray, bios: List<Pair<Bio?, Bio?>>, umbral: F
     if (m == 0) perm[i] else m
 }
 
+private val Rojo = androidx.compose.ui.graphics.Color(0xFFC8231E)
+
+private fun rachaMax(t: String): Int { var m = 0; var r = 0; var prev = ' '; for (c in t) { r = if (c == prev) r + 1 else 1; prev = c; if (r > m) m = r }; return m }
+
 private fun bioTxt(x: Bio?) = if (x == null) "sin plantilla" else "%+.2f".format(x.media)
 
 private fun autoPermitidos(pr: List<Pronostico>, umbral: Float): IntArray = IntArray(14) { i ->
@@ -190,14 +197,31 @@ private fun autoPermitidos(pr: List<Pronostico>, umbral: Float): IntArray = IntA
     m
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base, sel: Sel, prox: Prox, pr: List<Pronostico>, bios: List<Pair<Bio?, Bio?>>) {
+private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base, sel: Sel, prox: Prox, pr: List<Pronostico>, bios: List<Pair<Bio?, Bio?>>, efectivos: IntArray) {
+        val real = prox.real
+        val hayReal = real.any { it != ' ' }
         item {
             Text("Jornada", fontWeight = FontWeight.Bold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 b.proximas.forEachIndexed { i, x ->
-                    FilterChip(selected = sel.jornada == i, onClick = { sel.jornada = i; sel.manual = x.numero; sel.editado = false; sel.resultado = null },
+                    FilterChip(selected = sel.pasada == null && sel.jornada == i, onClick = { sel.jornada = i; sel.manual = x.numero; sel.pasada = null; sel.editado = false; sel.resultado = null },
                         label = { Text("Nº ${x.numero} · ${x.fecha.substring(8, 10)}/${x.fecha.substring(5, 7)}" + if (x.pendiente) "" else " ✓") })
                 }
+            }
+            TextButton(onClick = { sel.verAnteriores = !sel.verAnteriores }) {
+                Text(if (sel.verAnteriores) "Ocultar jornadas ya jugadas" else "Probar los filtros con jornadas ya jugadas…")
+            }
+            if (sel.verAnteriores) {
+                val vistas = b.proximas.map { it.fecha to it.numero }.toSet()
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    b.anteriores.filter { (it.fecha to it.numero) !in vistas }.take(60).forEach { x ->
+                        FilterChip(selected = sel.pasada?.let { it.fecha == x.fecha && it.numero == x.numero } == true,
+                            onClick = { sel.pasada = x; sel.editado = false; sel.resultado = null },
+                            label = { Text("Nº ${x.numero} · ${x.fecha.substring(8, 10)}/${x.fecha.substring(5, 7)}/${x.fecha.substring(2, 4)}") })
+                    }
+                }
+                Text("Se calcula todo como si fuera la víspera: las rachas solo usan partidos anteriores a esa fecha " +
+                    "(el biorritmo usa las plantillas de hoy).", style = MaterialTheme.typography.labelSmall)
             }
             if (faltaSiguiente(b.proximas)) Text("La quiniela nº ${(b.proximas.maxOfOrNull { it.numero } ?: 0) + 1} todavía no la ha publicado Loterías " +
                 "(suele salir al acabar la jornada intersemanal). Los datos se revisan cada 2 h; pulsa ACTUALIZAR." +
@@ -221,6 +245,30 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
                     Text("Ahora: ${14 - dobles - triples} fijos, $dobles dobles y $triples triples. Toca 1, X o 2 para cambiarlos a mano.",
                         style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     if (sel.editado) TextButton(onClick = { sel.editado = false; sel.permitidos = autoPermitidos(pr, sel.umbral) }) { Text("Volver a la tendencia") }
+                    if (hayReal) {
+                        val jug = (0 until 14).filter { real[it] != ' ' }
+                        val ok = jug.filter { efectivos[it] and (1 shl SIGNOS.indexOf(real[it])) != 0 }
+                        val mal = jug - ok.toSet()
+                        Text("Contra el resultado real", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                        Text("Resultado: " + real.chunked(1).joinToString(" ") { it.ifBlank { "·" } }, fontFamily = Maquina, fontWeight = FontWeight.Bold)
+                        Text("El filtro${if (sel.bio) " (con biorritmo)" else ""} acierta ${ok.size} de ${jug.size} partidos" +
+                            if (mal.isEmpty()) ": la columna ganadora está dentro." else "; falla en " +
+                                mal.joinToString(", ") { "${it + 1} (salió ${real[it]})" } + ".",
+                            color = if (mal.isEmpty()) Verde else Rojo, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                        val fijos = (0 until 14).filter { Integer.bitCount(efectivos[it]) == 1 && real[it] != ' ' }
+                        val dob = (0 until 14).filter { Integer.bitCount(efectivos[it]) == 2 && real[it] != ' ' }
+                        Text("Fijos: ${fijos.count { it in ok }}/${fijos.size} · dobles: ${dob.count { it in ok }}/${dob.size} · triples siempre aciertan.",
+                            style = MaterialTheme.typography.bodySmall)
+                        if (jug.size == 14) {
+                            val m = Mascara.de(real)
+                            val enM = m in sel.mascaras.orEmpty()
+                            val r = rachaMax(real)
+                            val enR = sel.racha == 0 || r <= sel.racha
+                            Text("Máscara real $m: ${if (enM) "✓ está entre las elegidas" else "✗ no está entre las elegidas"} · " +
+                                "racha más larga $r: ${if (enR) "✓ cumple" else "✗ la descartaría el límite"}.",
+                                color = if (enM && enR) Verde else Rojo, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
             }
         }
@@ -235,6 +283,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Clip, softWrap = false)
                         if (x.marcador.isNotBlank()) Text("Resultado: ${x.marcador}  →  ${x.signo}", fontWeight = FontWeight.Bold, color = Verde,
                             style = MaterialTheme.typography.bodySmall)
+                        val r = real.getOrNull(i) ?: ' '
+                        if (i < 14 && r != ' ') {
+                            val ok = efectivos[i] and (1 shl SIGNOS.indexOf(r)) != 0
+                            val tuyos = (0..2).filter { efectivos[i] and (1 shl it) != 0 }.joinToString(" ") { SIGNOS[it].toString() }
+                            Text(if (ok) "✓ Acierto: el filtro incluía el $r" else "✗ Fallo: salió $r y el filtro dejaba $tuyos",
+                                color = if (ok) Verde else Rojo, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                        }
                         if (p != null) {
                             Text("Local: ${p.formaLocal?.toCharArray()?.joinToString(" ") ?: "sin datos"}   ·   Visitante: ${p.formaVisit?.toCharArray()?.joinToString(" ") ?: "sin datos"}",
                                 style = MaterialTheme.typography.bodySmall, fontFamily = Maquina)
@@ -306,7 +361,9 @@ private fun GeneradorVista(b: Base, sel: Sel) {
     var calculando by remember { mutableStateOf(false) }
     var verBoleto by remember { mutableStateOf(true) }
     val est = b.estadistica
-    val prox = b.proximas.getOrNull(sel.jornada)
+    val prox = sel.pasada ?: b.proximas.getOrNull(sel.jornada)
+    val real = prox?.real ?: ""
+    val hayReal = real.any { it != ' ' }
     val pr = remember(prox, sel.k, b) { prox?.let { pronosticos(b, it, sel.k) }.orEmpty() }
     val bios = remember(prox, b) { prox?.let { biorritmos(b, it) }.orEmpty() }
     val efectivos = if (sel.bio) conBiorritmo(sel.permitidos, bios, sel.bioUmbral) else sel.permitidos
@@ -327,7 +384,7 @@ private fun GeneradorVista(b: Base, sel: Sel) {
         }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (prox == null) item { Text("No hay jornadas publicadas todavía.") } else jornadaItems(b, sel, prox, pr, bios)
+        if (prox == null) item { Text("No hay jornadas publicadas todavía.") } else jornadaItems(b, sel, prox, pr, bios, efectivos)
         item {
             Card {
                 Column(Modifier.padding(12.dp)) {
@@ -429,6 +486,18 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                             style = MaterialTheme.typography.bodySmall)
                         Text("Las máscaras${if (sel.racha > 0) " y la racha" else ""} elegidas habrían incluido la combinación ganadora en el ${dec(g.coberturaHist, 1)} % de las quinielas desde 1998.",
                             style = MaterialTheme.typography.bodySmall)
+                        if (hayReal) {
+                            val esc = remember(g, real) { Escrutinio(real, g.columnas.map { Generador.texto(it) }) }
+                            Text("Escrutinio con el resultado real", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                            Text("Mejor columna: ${esc.mejor} aciertos de ${esc.jugados}" + if (esc.jugados == 14) " · columnas con premio (10 o más): ${esc.premiadas}" else "",
+                                color = if (esc.mejor >= 10) Verde else Rojo, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                            Text((14 downTo 8).joinToString(" · ") { "$it: ${esc.reparto[it]}" } + " · menos: ${(0..7).sumOf { esc.reparto[it] }}",
+                                fontFamily = Maquina, style = MaterialTheme.typography.bodySmall)
+                            val fallos = (0 until 14).filter { real[it] != ' ' }.map { i -> i to g.columnas.count { Generador.texto(it)[i] != real[i] } }
+                                .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
+                            if (fallos.isNotEmpty()) Text("Partidos que más columnas fallan: " + fallos.joinToString(", ") {
+                                "${it.first + 1} (${pct(it.second.toDouble() / g.columnas.size)})" }, style = MaterialTheme.typography.bodySmall)
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
                                 val txt = buildString {
@@ -452,7 +521,8 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                 val bloques = g.columnas.take(400).toList().chunked(8)
                 items(bloques.size) { k ->
                     Boleto(k + 1, k * 8 + 1, prox?.partidos.orEmpty(), bloques[k], prox?.jornada, prox?.fecha.orEmpty(),
-                        String(CharArray(14) { i -> pr.getOrNull(i)?.p?.let { p -> SIGNOS[p.indices.maxByOrNull { p[it] }!!] } ?: ' ' }))
+                        if (hayReal) real else String(CharArray(14) { i -> pr.getOrNull(i)?.p?.let { p -> SIGNOS[p.indices.maxByOrNull { p[it] }!!] } ?: ' ' }),
+                        if (hayReal) real else null)
                 }
             } else items(g.columnas.take(500).withIndex().toList()) { (n, c) ->
                 val t = Generador.texto(c)
@@ -463,7 +533,16 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                     fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
                 Row(Modifier.fillMaxWidth()) {
                     Text("${n + 1}.", Modifier.width(48.dp), style = MaterialTheme.typography.bodySmall)
-                    Text(t.chunked(1).joinToString(" "), fontFamily = Maquina, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    val txt = androidx.compose.ui.text.buildAnnotatedString {
+                        t.forEachIndexed { i, c ->
+                            val r = real.getOrNull(i) ?: ' '
+                            if (r != ' ' && r != c) withStyle(androidx.compose.ui.text.SpanStyle(color = Rojo,
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)) { append(c) } else append(c)
+                            if (i < t.length - 1) append(' ')
+                        }
+                    }
+                    Text(txt, fontFamily = Maquina, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    if (hayReal) Text("${t.indices.count { real.getOrNull(it) == t[it] }} ac.  ", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     Text(Mascara.de(t).toString(), style = MaterialTheme.typography.labelSmall)
                 }
             }

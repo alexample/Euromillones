@@ -27,6 +27,8 @@ interface Lienzo {
 class DatosBoleto(
     val numero: Int, val primera: Int, val partidos: List<Pair<String, String>>, val pleno: Pair<String, String>?,
     val columnas: List<String>, val jornada: Int?, val fecha: String, val margen: String?,
+    /** Resultado real (14 signos, ' ' sin jugar): si está, el boleto sale escrutado. */
+    val real: String? = null,
 )
 
 /**
@@ -72,6 +74,42 @@ object Boleto80 {
         cruces(l, d, rnd)
         pie(l, d)
         suciedad(l, rnd)
+        if (d.real != null && d.real.any { it != ' ' }) escrutinio(l, d, d.real, rnd)
+    }
+
+    // ------------------------------------------------------------ escrutinio con bolígrafo rojo
+    /** Rodea la casilla buena donde la cruz falló y apunta los aciertos de cada apuesta al pie. */
+    private fun escrutinio(l: Lienzo, d: DatosBoleto, real: String, rnd: Random) {
+        val rojo = 0xFFC8231E.toInt()
+        val y0 = Y_FILAS + 14 * ALTO_FILA + 2f
+        d.columnas.forEachIndexed { a, col ->
+            if (a >= 8) return@forEachIndexed
+            var n = 0
+            for (i in 0 until 14) {
+                val r = real.getOrNull(i) ?: ' '; if (r == ' ') continue
+                if (col.getOrNull(i) == r) { n++; continue }
+                aro(l, xCasilla(a, SIGNOS.indexOf(r)), yFila(i), CASILLA * 0.85f, rojo, rnd)
+            }
+            val cx = X_APUESTAS + a * ANCHO_APUESTA + ANCHO_APUESTA / 2
+            l.rect(cx - 30f, y0 + 3f, cx + 30f, y0 + 29f, 0xFFF3E7BE.toInt(), relleno = true)
+            repeat(2) { k ->
+                l.texto("$n", cx + k * 0.7f, y0 + 30f, Lienzo.Fuente.LAPIZ, 54f, alpha(rojo, 0.9f), 1, giro = rnd.nextFloat() * 10f - 5f)
+            }
+        }
+    }
+
+    /** Círculo hecho a mano con bolígrafo, que no acaba de cerrar. */
+    private fun aro(l: Lienzo, cx: Float, cy: Float, r: Float, color: Int, rnd: Random) {
+        val ini = rnd.nextFloat() * 6.283f; val pasos = 22
+        val rx = r * (1f + rnd.nextFloat() * 0.15f); val ry = r * (0.9f + rnd.nextFloat() * 0.15f)
+        var px = cx + rx * cos(ini); var py = cy + ry * sin(ini)
+        for (k in 1..pasos + 2) {
+            val t = ini + k * 6.283f / pasos * 1.05f
+            val w = 1f + (rnd.nextFloat() - 0.5f) * 0.12f
+            val nx = cx + rx * w * cos(t); val ny = cy + ry * w * sin(t)
+            l.linea(px, py, nx, ny, alpha(color, 0.9f), 2.2f)
+            px = nx; py = ny
+        }
     }
 
     // ------------------------------------------------------------ papel
@@ -252,7 +290,7 @@ object Boleto80 {
         val y0 = Y_FILAS + 14 * ALTO_FILA + 2f
         l.rect(X_NOMBRE - 6f, y0, X_APUESTAS + 8 * ANCHO_APUESTA, y0 + 32f, NARANJA_SUAVE, relleno = true)
         l.rect(X_NOMBRE - 6f, y0, X_APUESTAS + 8 * ANCHO_APUESTA, y0 + 32f, NARANJA, relleno = false, ancho = 2f)
-        l.texto("APUESTAS", (X_NOMBRE + X_APUESTAS) / 2 - 8f, y0 + 25f, Lienzo.Fuente.IMPRENTA, 22f, NARANJA, 1, espaciado = 6f)
+        l.texto(if (d.real != null && d.real.any { it != ' ' }) "ACIERTOS" else "APUESTAS", (X_NOMBRE + X_APUESTAS) / 2 - 8f, y0 + 25f, Lienzo.Fuente.IMPRENTA, 22f, NARANJA, 1, espaciado = 6f)
         for (a in 0 until 8) {
             val n = d.primera + a
             l.texto("$n.ª", X_APUESTAS + a * ANCHO_APUESTA + ANCHO_APUESTA / 2, y0 + 25f, Lienzo.Fuente.IMPRENTA, 20f,
