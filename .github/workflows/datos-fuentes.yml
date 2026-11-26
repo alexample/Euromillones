@@ -14,18 +14,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Descargar fuentes libres (Google Fonts, licencias OFL/Apache)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          D=quinielas/src/main/res/font
-          mkdir -p $D
-          B=https://raw.githubusercontent.com/google/fonts/main
-          curl -fsSL $B/apache/specialelite/SpecialElite-Regular.ttf -o $D/maquina.ttf
-          curl -fsSL $B/ofl/fjallaone/FjallaOne-Regular.ttf -o $D/imprenta.ttf
-          curl -fsSL $B/ofl/pragatinarrow/PragatiNarrow-Regular.ttf -o $D/estrecha.ttf
-          curl -fsSL $B/ofl/pragatinarrow/PragatiNarrow-Bold.ttf -o $D/estrecha_negrita.ttf
-          curl -fsSL $B/ofl/reeniebeanie/ReenieBeanie-Regular.ttf -o $D/lapiz.ttf
-          ls -la $D
-          file $D/*
+          python3 - <<'PY'
+          import json, os, urllib.request
+          D = "quinielas/src/main/res/font"; os.makedirs(D, exist_ok=True)
+          H = {"Authorization": "Bearer " + os.environ["GH_TOKEN"], "User-Agent": "x"}
+          want = {"maquina": ("apache/specialelite", "ofl/specialelite"), "imprenta": ("ofl/fjallaone",),
+                  "estrecha": ("ofl/pragatinarrow",), "lapiz": ("ofl/reeniebeanie", "apache/reeniebeanie")}
+          for name, dirs in want.items():
+              ok = False
+              for d in dirs:
+                  try:
+                      r = urllib.request.urlopen(urllib.request.Request("https://api.github.com/repos/google/fonts/contents/" + d, headers=H))
+                      files = [f for f in json.load(r) if f["name"].lower().endswith(".ttf")]
+                  except Exception as e:
+                      print(d, "ERROR", e); continue
+                  print(d, [f["name"] for f in files])
+                  files.sort(key=lambda f: (("Bold" in f["name"]) or ("[" in f["name"]), len(f["name"])))
+                  for f in files[:1]:
+                      urllib.request.urlretrieve(f["download_url"], f"{D}/{name}.ttf"); ok = True
+                  bold = [f for f in files if f["name"].endswith("-Bold.ttf")]
+                  if name == "estrecha" and bold: urllib.request.urlretrieve(bold[0]["download_url"], f"{D}/estrecha_negrita.ttf")
+                  if ok: break
+              print(name, "OK" if ok else "NO ENCONTRADA")
+          PY
+          ls -la quinielas/src/main/res/font
       - name: Guardar
         run: |
           git add quinielas/src/main/res/font
