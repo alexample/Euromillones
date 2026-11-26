@@ -211,7 +211,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
             Card {
                 Column(Modifier.padding(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("${x.pos}. ${x.local} – ${x.visit}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text("${x.pos} ${Boleto80.nombre(x.local)}-${Boleto80.nombre(x.visit)}", fontFamily = Estrecha, fontWeight = FontWeight.Bold,
+                            fontSize = 19.sp, modifier = Modifier.weight(1f))
                         if (x.marcador.isNotBlank()) Text("${x.marcador}  ${x.signo}", fontWeight = FontWeight.Bold, color = Verde)
                     }
                     if (p != null) {
@@ -240,10 +241,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
                     if (i < 14) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for (s in 0..2) {
                             val on = sel.permitidos[i] and (1 shl s) != 0
-                            FilterChip(selected = on, onClick = {
+                            CasillaLapiz(SIGNOS[s], on, prox.numero * 97 + i * 7 + s) {
                                 val a = sel.permitidos.copyOf(); val nv = a[i] xor (1 shl s); if (nv != 0) a[i] = nv
                                 sel.permitidos = a; sel.editado = true; sel.resultado = null
-                            }, label = { Text(SIGNOS[s].toString(), fontWeight = FontWeight.Bold) })
+                            }
                         }
                     } else Text("Pleno al 15 (goles): no entra en el generador.", style = MaterialTheme.typography.labelSmall)
                 }

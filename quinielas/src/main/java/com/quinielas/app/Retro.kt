@@ -3,6 +3,11 @@ package com.quinielas.app
 import android.graphics.Typeface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,15 +46,20 @@ import androidx.compose.ui.unit.sp
 val Papel = Color(0xFFEFE3B4)
 val PapelOscuro = Color(0xFFE4D49C)
 val Tinta = Color(0xFFE2532F)          // naranja-rojo de imprenta del boleto
+val TintaBoleto = Color(0xFFE4572E)
 val TintaSuave = Color(0xFFF6C9B4)
 val Boli = Color(0xFF1F3A93)           // bolígrafo azul
 val Texto = Color(0xFF2B2118)
 
-/** Letra de máquina de escribir (la que trae Android; si no está, monoespaciada). */
-val Maquina: FontFamily = runCatching {
-    val tf = Typeface.create("cutive-mono", Typeface.NORMAL)
-    if (tf == Typeface.DEFAULT) FontFamily.Monospace else FontFamily(tf)
-}.getOrDefault(FontFamily.Monospace)
+/** Fuentes del boleto (Google Fonts, licencias OFL/Apache): máquina de escribir, imprenta estrecha y lápiz. */
+val Maquina = FontFamily(androidx.compose.ui.text.font.Font(R.font.maquina))
+val Imprenta = FontFamily(androidx.compose.ui.text.font.Font(R.font.imprenta))
+val Estrecha = FontFamily(
+    androidx.compose.ui.text.font.Font(R.font.estrecha),
+    androidx.compose.ui.text.font.Font(R.font.estrecha_negrita, FontWeight.Bold),
+    androidx.compose.ui.text.font.Font(R.font.estrecha_negrita, FontWeight.SemiBold),
+)
+val Lapiz = FontFamily(androidx.compose.ui.text.font.Font(R.font.lapiz))
 
 @Composable
 fun TemaRetro(content: @Composable () -> Unit) {
@@ -62,166 +72,136 @@ fun TemaRetro(content: @Composable () -> Unit) {
         surfaceContainerLow = Papel, surfaceContainerLowest = Papel,
     )
     val t = Typography()
-    fun TextStyle.m() = copy(fontFamily = Maquina)
+    fun TextStyle.f(ff: FontFamily, extra: Float = 0f) = copy(fontFamily = ff, fontSize = fontSize * (1f + extra))
     val tipos = Typography(
-        displayLarge = t.displayLarge.m(), displayMedium = t.displayMedium.m(), displaySmall = t.displaySmall.m(),
-        headlineLarge = t.headlineLarge.m(), headlineMedium = t.headlineMedium.m(), headlineSmall = t.headlineSmall.m(),
-        titleLarge = t.titleLarge.m(), titleMedium = t.titleMedium.m(), titleSmall = t.titleSmall.m(),
-        bodyLarge = t.bodyLarge.m(), bodyMedium = t.bodyMedium.m(), bodySmall = t.bodySmall.m(),
-        labelLarge = t.labelLarge.m(), labelMedium = t.labelMedium.m(), labelSmall = t.labelSmall.m(),
+        displayLarge = t.displayLarge.f(Imprenta), displayMedium = t.displayMedium.f(Imprenta), displaySmall = t.displaySmall.f(Imprenta),
+        headlineLarge = t.headlineLarge.f(Imprenta), headlineMedium = t.headlineMedium.f(Imprenta), headlineSmall = t.headlineSmall.f(Imprenta),
+        titleLarge = t.titleLarge.f(Imprenta), titleMedium = t.titleMedium.f(Imprenta), titleSmall = t.titleSmall.f(Imprenta),
+        bodyLarge = t.bodyLarge.f(Estrecha, 0.12f), bodyMedium = t.bodyMedium.f(Estrecha, 0.15f), bodySmall = t.bodySmall.f(Estrecha, 0.18f),
+        labelLarge = t.labelLarge.f(Maquina), labelMedium = t.labelMedium.f(Maquina), labelSmall = t.labelSmall.f(Maquina),
     )
     MaterialTheme(colorScheme = colores, typography = tipos, content = content)
 }
 
-// --- Boleto de 1984: papel amarillento, tinta naranja-roja, cruces de bolígrafo ---
-val PapelBoleto = Color(0xFFEFE3B4)
-val TintaBoleto = Color(0xFFE2532F)
-val Boligrafo = Color(0xFF2E2E3A)
+// --- Boleto de 1984 dibujado con Boleto80 (papel, tinta de imprenta y cruces a lápiz) ---
 
-private val Mano: FontFamily = runCatching {
-    val tf = Typeface.create("casual", Typeface.NORMAL)
-    if (tf == Typeface.DEFAULT) FontFamily.Cursive else FontFamily(tf)
-}.getOrDefault(FontFamily.Cursive)
+/** Lienzo de Android para dibujar el boleto. */
+class LienzoAndroid(private val c: android.graphics.Canvas, private val ctx: android.content.Context) : Lienzo {
+    private val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND }
+    private val path = android.graphics.Path()
 
-private val Estrecha: FontFamily = runCatching { FontFamily(Typeface.create("sans-serif-condensed", Typeface.NORMAL)) }.getOrDefault(FontFamily.SansSerif)
-
-private val CEL = 12.dp       // casilla
-private val FILA = 18.dp
-
-/** Casilla del boleto; la marcada lleva una cruz de bolígrafo un poco torcida. */
-@Composable
-private fun Casilla(marcada: Boolean, giro: Float) {
-    Box(Modifier.size(CEL).border(0.8.dp, TintaBoleto), contentAlignment = Alignment.Center) {
-        if (marcada) Text("X", color = Boligrafo, fontSize = 13.sp, fontFamily = Mano, fontWeight = FontWeight.Bold, modifier = Modifier.rotate(giro))
+    override fun papel(l: Float, t: Float, r: Float, b: Float, semilla: Int) {
+        val bmp = Texturas.papel(ctx, (r - l).toInt(), (b - t).toInt())
+        c.drawBitmap(bmp, l, t, null)
     }
+    private fun trazo(color: Int, ancho: Float) { p.style = android.graphics.Paint.Style.STROKE; p.color = color; p.strokeWidth = ancho; p.shader = null }
+    override fun linea(x1: Float, y1: Float, x2: Float, y2: Float, color: Int, ancho: Float) { trazo(color, ancho); c.drawLine(x1, y1, x2, y2, p) }
+    override fun curva(x0: Float, y0: Float, cx: Float, cy: Float, x1: Float, y1: Float, color: Int, ancho: Float) {
+        trazo(color, ancho); path.reset(); path.moveTo(x0, y0); path.quadTo(cx, cy, x1, y1); c.drawPath(path, p)
+    }
+    override fun rect(l: Float, t: Float, r: Float, b: Float, color: Int, relleno: Boolean, ancho: Float) {
+        if (relleno) { p.style = android.graphics.Paint.Style.FILL; p.color = color; p.shader = null } else trazo(color, ancho)
+        c.drawRect(l, t, r, b, p)
+    }
+    override fun circulo(cx: Float, cy: Float, r: Float, color: Int) { p.style = android.graphics.Paint.Style.FILL; p.color = color; p.shader = null; c.drawCircle(cx, cy, r, p) }
+    override fun mancha(cx: Float, cy: Float, r: Float, color: Int) {
+        p.style = android.graphics.Paint.Style.FILL
+        p.shader = android.graphics.RadialGradient(cx, cy, r, color, 0, android.graphics.Shader.TileMode.CLAMP)
+        c.drawCircle(cx, cy, r, p); p.shader = null
+    }
+    private fun fuente(f: Lienzo.Fuente) = Texturas.fuente(ctx, f)
+    override fun texto(s: String, x: Float, y: Float, f: Lienzo.Fuente, tam: Float, color: Int, alinear: Int, espaciado: Float, giro: Float) {
+        p.style = android.graphics.Paint.Style.FILL; p.shader = null; p.color = color
+        p.typeface = fuente(f); p.textSize = tam; p.letterSpacing = espaciado / tam
+        p.textAlign = when (alinear) { 1 -> android.graphics.Paint.Align.CENTER; 2 -> android.graphics.Paint.Align.RIGHT; else -> android.graphics.Paint.Align.LEFT }
+        if (giro != 0f) { c.save(); c.rotate(giro, x, y); c.drawText(s, x, y, p); c.restore() } else c.drawText(s, x, y, p)
+        p.letterSpacing = 0f
+    }
+    override fun medir(s: String, f: Lienzo.Fuente, tam: Float): Float { p.typeface = fuente(f); p.textSize = tam; p.letterSpacing = 0f; return p.measureText(s) }
 }
 
-/** Líneas onduladas del número de serie (como el fondo de seguridad del resguardo). */
-@Composable
-private fun Ondas(modifier: Modifier) {
-    androidx.compose.foundation.Canvas(modifier) {
-        val paso = size.height / 7
-        for (k in 0 until 7) {
-            val y0 = paso * (k + 0.5f)
-            val path = androidx.compose.ui.graphics.Path().apply {
-                moveTo(0f, y0)
-                var x = 0f
-                while (x < size.width) { quadraticBezierTo(x + 6f, y0 - 3f, x + 12f, y0); quadraticBezierTo(x + 18f, y0 + 3f, x + 24f, y0); x += 24f }
-            }
-            drawPath(path, TintaBoleto.copy(alpha = 0.5f), style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
+/** Fuentes del boleto y textura del papel (se generan una vez). */
+object Texturas {
+    private var papelBmp: android.graphics.Bitmap? = null
+    private val fuentes = HashMap<Lienzo.Fuente, android.graphics.Typeface>()
+
+    fun fuente(ctx: android.content.Context, f: Lienzo.Fuente): android.graphics.Typeface = fuentes.getOrPut(f) {
+        val id = when (f) {
+            Lienzo.Fuente.MAQUINA -> R.font.maquina; Lienzo.Fuente.IMPRENTA -> R.font.imprenta
+            Lienzo.Fuente.ESTRECHA -> R.font.estrecha; Lienzo.Fuente.ESTRECHA_NEGRITA -> R.font.estrecha_negrita
+            Lienzo.Fuente.LAPIZ -> R.font.lapiz
         }
+        runCatching { androidx.core.content.res.ResourcesCompat.getFont(ctx, id) }.getOrNull() ?: android.graphics.Typeface.DEFAULT
+    }
+
+    /** Papel amarillento con grano, oscurecido en los bordes y con fibras. */
+    @Synchronized
+    fun papel(ctx: android.content.Context, w: Int, h: Int): android.graphics.Bitmap {
+        papelBmp?.let { if (it.width == w && it.height == h) return it }
+        val px = IntArray(w * h)
+        val rnd = kotlin.random.Random(1984)
+        for (y in 0 until h) for (x in 0 until w) {
+            val n = (rnd.nextFloat() - 0.5f) * 18f
+            val vx = x.toFloat() / w - 0.5f; val vy = y.toFloat() / h - 0.5f
+            val dark = (vx * vx + vy * vy) * 30f
+            val r = (239 + n - dark).toInt().coerceIn(0, 255); val g = (227 + n - dark).toInt().coerceIn(0, 255)
+            val b = (182 + n * 0.8f - dark * 1.3f).toInt().coerceIn(0, 255)
+            px[y * w + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        val bmp = android.graphics.Bitmap.createBitmap(px, w, h, android.graphics.Bitmap.Config.ARGB_8888).copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+        val c = android.graphics.Canvas(bmp)
+        val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.STROKE; strokeWidth = 1f }
+        val path = android.graphics.Path()
+        repeat(260) {
+            p.color = android.graphics.Color.argb(18 + rnd.nextInt(20), 150, 120, 70)
+            val x = rnd.nextInt(w).toFloat(); val y = rnd.nextInt(h).toFloat()
+            path.reset(); path.moveTo(x, y); path.quadTo(x + rnd.nextFloat() * 10, y + rnd.nextFloat() * 6, x + rnd.nextFloat() * 18, y + rnd.nextFloat() * 4)
+            c.drawPath(path, p)
+        }
+        papelBmp = bmp
+        return bmp
     }
 }
 
-/**
- * Boleto como el de la temporada 83/84: cabecera con el pleno, la clave, la jornada, la fecha y el número de
- * resguardo; 14 partidos con el pronóstico apuntado a mano en el margen y 8 apuestas de casillas 1 X 2.
- */
+/** El boleto completo, como el de la temporada 83/84. */
 @Composable
 fun Boleto(
     numero: Int, primera: Int, partidos: List<PartidoProx>, columnas: List<Int>, jornada: Int?,
     fecha: String = "", margen: String? = null,
 ) {
-    val serie = remember(columnas, numero) { (columnas.fold(numero * 7919) { a, c -> a * 31 + c } and 0x7FFFFFFF) % 90_000_000 + 10_000_000 }
-    val clave = "ABCDEFGH"[serie % 8]
-    val giros = remember(columnas) { val r = kotlin.random.Random(serie); FloatArray(14 * 8) { r.nextFloat() * 24f - 12f } }
-    val f = runCatching { java.time.LocalDate.parse(fecha.take(10)) }.getOrNull()
-    Column(Modifier.background(PapelBoleto).border(1.dp, TintaBoleto.copy(alpha = 0.6f)).padding(6.dp).horizontalScroll(rememberScrollState())) {
-        // ---------- Cabecera ----------
-        Row(Modifier.height(86.dp)) {
-            // Sello rojo de las apuestas (vertical)
-            Box(Modifier.width(38.dp).fillMaxHeight().background(TintaBoleto).padding(2.dp).background(Color(0xFFF7E9E2)).border(1.dp, TintaBoleto),
-                contentAlignment = Alignment.Center) {
-                Text("${columnas.size} APUESTAS  ZA$serie".take(22), color = TintaBoleto, fontFamily = Estrecha, fontWeight = FontWeight.Bold,
-                    fontSize = 9.sp, maxLines = 1, softWrap = false, modifier = Modifier.rotate(90f).width(80.dp))
-            }
-            // Pleno y reclamaciones
-            Column(Modifier.width(190.dp).fillMaxHeight().border(1.dp, Texto.copy(alpha = 0.7f)).padding(4.dp)) {
-                val p15 = partidos.getOrNull(14)
-                Text("PLENO AL 15:", fontFamily = Estrecha, fontSize = 10.sp, color = Texto, fontWeight = FontWeight.SemiBold)
-                Text(p15?.let { "  ${it.local}-${it.visit}." } ?: "  —", fontFamily = Estrecha, fontSize = 10.sp, color = Texto, maxLines = 1)
-                Spacer(Modifier.weight(1f))
-                Text("RECLAMACIONES: (Véase el dorso)", fontFamily = Estrecha, fontSize = 8.sp, color = Texto)
-            }
-            // Clave, jornada y fecha
-            Column(Modifier.width(66.dp).fillMaxHeight().border(1.dp, Texto.copy(alpha = 0.7f)), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Clave $clave", fontFamily = Estrecha, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Texto)
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Texto.copy(alpha = 0.7f)))
-                Text("Jornada", fontFamily = Estrecha, fontSize = 8.sp, color = Texto)
-                Text("${jornada ?: "—"}", fontFamily = Estrecha, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Texto)
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Texto.copy(alpha = 0.7f)))
-                Text(f?.let { "${it.dayOfMonth}-${it.monthValue}-${it.year}" } ?: "", fontFamily = Estrecha, fontSize = 10.sp, color = Texto)
-            }
-            // Número de resguardo
-            Column(Modifier.width(110.dp).fillMaxHeight().border(1.dp, Texto.copy(alpha = 0.7f)), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
-                    Ondas(Modifier.fillMaxWidth().height(56.dp))
-                    Text("$serie", color = TintaBoleto, fontFamily = Maquina, fontSize = 17.sp, letterSpacing = 1.sp)
-                }
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Texto.copy(alpha = 0.7f)))
-                Text("RESGUARDO", fontFamily = Estrecha, fontSize = 12.sp, color = Texto, modifier = Modifier.padding(top = 4.dp))
-            }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val datos = remember(numero, columnas, partidos, margen) {
+        DatosBoleto(numero, primera, partidos.take(14).map { it.local to it.visit }, partidos.getOrNull(14)?.let { it.local to it.visit },
+            columnas.map { Generador.texto(it) }, jornada, fecha, margen)
+    }
+    androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().aspectRatio(Boleto80.ANCHO / Boleto80.ALTO)) {
+        drawIntoCanvas { c ->
+            val nc = c.nativeCanvas
+            nc.save()
+            val k = size.width / Boleto80.ANCHO
+            nc.scale(k, k)
+            Boleto80.dibujar(LienzoAndroid(nc, ctx), datos)
+            nc.restore()
         }
-        // ---------- Cuerpo ----------
-        Row {
-            // Aviso vertical
-            Box(Modifier.width(16.dp).height(FILA * 15), contentAlignment = Alignment.Center) {
-                Text("ATENCIÓN · RELLENE LAS CASILLAS CON EL SIGNO «X»", color = Texto, fontFamily = Estrecha, fontSize = 7.sp,
-                    maxLines = 1, softWrap = false, modifier = Modifier.rotate(-90f).width(FILA * 15))
-            }
-            // Partidos con el pronóstico a mano en el margen
-            Column(Modifier.width(150.dp)) {
-                Box(Modifier.height(FILA))
-                for (i in 0 until 14) {
-                    val p = partidos.getOrNull(i)
-                    Row(Modifier.height(FILA), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${i + 1} " + (p?.let { "${abrev(it.local)}-${abrev(it.visit)}" } ?: "") + " ..........................",
-                            fontFamily = Estrecha, fontSize = 9.sp, color = Texto, maxLines = 1, softWrap = false,
-                            overflow = TextOverflow.Clip, modifier = Modifier.weight(1f),
-                        )
-                        Text(margen?.getOrNull(i)?.let { if (it == 'X') "X" else it.toString() } ?: "", fontFamily = Mano, fontSize = 15.sp,
-                            color = Color(0xFFB8322A), modifier = Modifier.width(14.dp))
-                    }
-                    if (i == 3 || i == 7 || i == 11) Box(Modifier.width(150.dp).height(1.5.dp).background(TintaBoleto))
-                }
-            }
-            // Las 8 apuestas
-            Column {
-                Row(Modifier.height(FILA), verticalAlignment = Alignment.CenterVertically) {
-                    repeat(8) { a ->
-                        Row(Modifier.padding(start = if (a == 0) 2.dp else 4.dp)) {
-                            for (s in SIGNOS) Text(s.toString(), color = TintaBoleto, fontFamily = Estrecha, fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp, modifier = Modifier.width(CEL + 1.dp))
-                        }
-                    }
-                }
-                for (i in 0 until 14) {
-                    Row(Modifier.height(FILA), verticalAlignment = Alignment.CenterVertically) {
-                        repeat(8) { a ->
-                            val t = columnas.getOrNull(a)?.let { Generador.texto(it) }
-                            Row(Modifier.padding(start = if (a == 0) 2.dp else 4.dp), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                                for (s in SIGNOS) Casilla(t != null && t[i] == s, giros[i * 8 + a])
-                            }
-                        }
-                    }
-                    if (i == 3 || i == 7 || i == 11) Box(Modifier.width((CEL * 3 + 6.dp) * 8).height(1.5.dp).background(TintaBoleto))
-                }
-                // Pie: número de apuesta
-                Row(Modifier.height(FILA).background(TintaBoleto.copy(alpha = 0.12f)), verticalAlignment = Alignment.CenterVertically) {
-                    repeat(8) { a ->
-                        Text(if (a < columnas.size) "${primera + a}ª" else "", color = TintaBoleto, fontFamily = Estrecha, fontWeight = FontWeight.Bold,
-                            fontSize = 10.sp, modifier = Modifier.padding(start = if (a == 0) 2.dp else 4.dp).width(CEL * 3 + 2.dp))
-                    }
-                }
-            }
-        }
-        Text("A P U E S T A S   ·   ${columnas.size} × ${"%.2f".format(Generador.PRECIO)} €", color = TintaBoleto, fontFamily = Estrecha,
-            fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 2.sp)
     }
 }
 
-/** Nombres como en los boletos de entonces: «R. MADRID», «AT. BILBAO», «D. CORUÑA». */
-private fun abrev(n: String): String = n.uppercase()
-    .replace("REAL ", "R. ").replace("ATLÉTICO ", "AT. ").replace("ATLETICO ", "AT. ").replace("DEPORTIVO", "D. CORUÑA")
-    .replace("ATHLETIC CLUB", "AT. BILBAO").replace("ATHLETIC", "AT. BILBAO").take(13)
+/** Casilla de boleto que se tacha a lápiz al tocarla (para elegir los signos de cada partido). */
+@Composable
+fun CasillaLapiz(signo: Char, marcada: Boolean, semilla: Int, onClick: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 4.dp)) {
+        Text(signo.toString(), fontFamily = Imprenta, color = TintaBoleto, fontSize = 18.sp)
+        androidx.compose.foundation.Canvas(Modifier.size(30.dp)) {
+            val k = size.width / 30f
+            drawIntoCanvas { c ->
+                val nc = c.nativeCanvas; nc.save(); nc.scale(k, k)
+                val l = LienzoAndroid(nc, ctx)
+                l.linea(3f, 3f, 27f, 3f, TintaBoleto.toArgb(), 1.6f); l.linea(3f, 27f, 27f, 27f, TintaBoleto.toArgb(), 1.6f)
+                l.linea(3f, 3f, 3f, 27f, TintaBoleto.toArgb(), 1.6f); l.linea(27f, 3f, 27f, 27f, TintaBoleto.toArgb(), 1.6f)
+                if (marcada) Boleto80.cruz(l, 15f, 15f, 26f, kotlin.random.Random(semilla), 0xFF3C3C44.toInt(), pasadas = 3, grosor = 1.8f, intensidad = 1.3f)
+                nc.restore()
+            }
+        }
+    }
+}
