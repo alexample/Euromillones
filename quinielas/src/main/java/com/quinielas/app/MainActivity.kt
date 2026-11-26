@@ -427,7 +427,8 @@ private fun GeneradorVista(b: Base, sel: Sel) {
             if (verBoleto) {
                 val bloques = g.columnas.take(400).toList().chunked(8)
                 items(bloques.size) { k ->
-                    Boleto(k + 1, k * 8 + 1, prox?.partidos.orEmpty(), bloques[k], prox?.jornada)
+                    Boleto(k + 1, k * 8 + 1, prox?.partidos.orEmpty(), bloques[k], prox?.jornada, prox?.fecha.orEmpty(),
+                        String(CharArray(14) { i -> pr.getOrNull(i)?.p?.let { p -> SIGNOS[p.indices.maxByOrNull { p[it] }!!] } ?: ' ' }))
                 }
             } else items(g.columnas.take(500).withIndex().toList()) { (n, c) ->
                 val t = Generador.texto(c)
