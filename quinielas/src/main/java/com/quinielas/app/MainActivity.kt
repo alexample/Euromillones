@@ -209,36 +209,41 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
         itemsIndexed(prox.partidos) { i, x ->
             val p = pr.getOrNull(i)
             Card {
-                Column(Modifier.padding(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("${x.pos} ${Boleto80.nombre(x.local)}-${Boleto80.nombre(x.visit)}", fontFamily = Estrecha, fontWeight = FontWeight.Bold,
-                            fontSize = 19.sp, modifier = Modifier.weight(1f))
-                        if (x.marcador.isNotBlank()) Text("${x.marcador}  ${x.signo}", fontWeight = FontWeight.Bold, color = Verde)
-                    }
-                    if (p != null) {
-                        Text("Local: ${p.formaLocal?.toCharArray()?.joinToString(" ") ?: "sin datos"}   ·   Visitante: ${p.formaVisit?.toCharArray()?.joinToString(" ") ?: "sin datos"}",
-                            style = MaterialTheme.typography.bodySmall, fontFamily = Maquina)
-                        Text("1 ${pct(p.p[0])} · X ${pct(p.p[1])} · 2 ${pct(p.p[2])}   (${p.nota}; casos ${p.nLocal}/${p.nVisit})",
+                Row(Modifier.padding(10.dp)) {
+                    // Izquierda: el partido con sus puntos suspensivos, como en el boleto, y debajo el estudio
+                    Column(Modifier.weight(1f)) {
+                        Text("${x.pos} ${Boleto80.nombre(x.local)}-${Boleto80.nombre(x.visit)} ......................................",
+                            fontFamily = Estrecha, fontWeight = FontWeight.Bold, fontSize = 19.sp, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Clip, softWrap = false)
+                        if (x.marcador.isNotBlank()) Text("Resultado: ${x.marcador}  →  ${x.signo}", fontWeight = FontWeight.Bold, color = Verde,
                             style = MaterialTheme.typography.bodySmall)
-                        val bio = bios.getOrNull(i)
-                        if (bio != null && (bio.first != null || bio.second != null)) Text(
-                            "Biorritmo: local ${bioTxt(bio.first)} · visitante ${bioTxt(bio.second)}" +
-                                if (sel.bio && bio.first != null && bio.second != null && kotlin.math.abs(bio.first!!.media - bio.second!!.media) >= sel.bioUmbral)
-                                    (if (bio.first!!.media > bio.second!!.media) "  → filtro quita el 2" else "  → filtro quita el 1") else "",
-                            style = MaterialTheme.typography.labelSmall)
-                        p.siguienteLocal?.let { s -> Text("Tras «${p.formaLocal}» en casa: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
-                        p.siguienteVisit?.let { s -> Text("Tras «${p.formaVisit}» fuera: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
-                        var ver by remember(p) { mutableStateOf(false) }
-                        if (p.formaLocal != null || p.formaVisit != null) TextButton(onClick = { ver = !ver }) {
-                            Text(if (ver) "Ocultar equipos con la misma racha" else "Ver equipos con la misma racha")
+                        if (p != null) {
+                            Text("Local: ${p.formaLocal?.toCharArray()?.joinToString(" ") ?: "sin datos"}   ·   Visitante: ${p.formaVisit?.toCharArray()?.joinToString(" ") ?: "sin datos"}",
+                                style = MaterialTheme.typography.bodySmall, fontFamily = Maquina)
+                            Text("1 ${pct(p.p[0])} · X ${pct(p.p[1])} · 2 ${pct(p.p[2])}   (${p.nota}; casos ${p.nLocal}/${p.nVisit})",
+                                style = MaterialTheme.typography.bodySmall)
+                            val bio = bios.getOrNull(i)
+                            if (bio != null && (bio.first != null || bio.second != null)) Text(
+                                "Biorritmo: local ${bioTxt(bio.first)} · visitante ${bioTxt(bio.second)}" +
+                                    if (sel.bio && bio.first != null && bio.second != null && kotlin.math.abs(bio.first!!.media - bio.second!!.media) >= sel.bioUmbral)
+                                        (if (bio.first!!.media > bio.second!!.media) "  → filtro quita el 2" else "  → filtro quita el 1") else "",
+                                style = MaterialTheme.typography.labelSmall)
+                            p.siguienteLocal?.let { s -> Text("Tras «${p.formaLocal}» en casa: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
+                            p.siguienteVisit?.let { s -> Text("Tras «${p.formaVisit}» fuera: G ${s[0]} · E ${s[1]} · P ${s[2]}", style = MaterialTheme.typography.labelSmall) }
+                            var ver by remember(p) { mutableStateOf(false) }
+                            if (p.formaLocal != null || p.formaVisit != null) TextButton(onClick = { ver = !ver }) {
+                                Text(if (ver) "Ocultar equipos con la misma racha" else "Ver equipos con la misma racha")
+                            }
+                            if (ver) {
+                                val f = x.fecha.take(10).ifEmpty { prox.fecha }
+                                p.formaLocal?.let { CasosLista(b, x.local, it, true, f) }
+                                p.formaVisit?.let { CasosLista(b, x.visit, it, false, f) }
+                            }
                         }
-                        if (ver) {
-                            val f = x.fecha.take(10).ifEmpty { prox.fecha }
-                            p.formaLocal?.let { CasosLista(b, x.local, it, true, f) }
-                            p.formaVisit?.let { CasosLista(b, x.visit, it, false, f) }
-                        }
+                        if (i >= 14) Text("Pleno al 15 (goles): no entra en el generador.", style = MaterialTheme.typography.labelSmall)
                     }
-                    if (i < 14) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Derecha: las casillas 1 X 2, que se tachan a lápiz
+                    if (i < 14) Row(Modifier.padding(start = 4.dp)) {
                         for (s in 0..2) {
                             val on = sel.permitidos[i] and (1 shl s) != 0
                             CasillaLapiz(SIGNOS[s], on, prox.numero * 97 + i * 7 + s) {
@@ -246,7 +251,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
                                 sel.permitidos = a; sel.editado = true; sel.resultado = null
                             }
                         }
-                    } else Text("Pleno al 15 (goles): no entra en el generador.", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
             }
         }

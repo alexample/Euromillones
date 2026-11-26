@@ -190,8 +190,8 @@ fun Boleto(
 @Composable
 fun CasillaLapiz(signo: Char, marcada: Boolean, semilla: Int, onClick: () -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 4.dp)) {
-        Text(signo.toString(), fontFamily = Imprenta, color = TintaBoleto, fontSize = 18.sp)
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 1.dp)) {
+        Text(signo.toString(), fontFamily = Imprenta, color = TintaBoleto, fontSize = 16.sp)
         androidx.compose.foundation.Canvas(Modifier.size(30.dp)) {
             val k = size.width / 30f
             drawIntoCanvas { c ->
