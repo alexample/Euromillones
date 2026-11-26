@@ -65,13 +65,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
-private val Verde = Color(0xFF166534)
+private val Verde = Tinta
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SolarEntropy.start()
-        setContent { MaterialTheme(colorScheme = lightColorScheme(primary = Verde)) { App() } }
+        setContent { TemaRetro { App() } }
     }
 }
 
@@ -108,17 +108,20 @@ private fun App() {
     val sel = remember { Sel() }
     LaunchedEffect(Unit) { Datos.cargar(ctx, red = false); Datos.cargar(ctx, red = true) }
 
-    Scaffold(topBar = {
+    Scaffold(containerColor = Papel, topBar = {
         TopAppBar(
-            title = { Column { Text("Quinielas", fontWeight = FontWeight.Bold); Text(estado, style = MaterialTheme.typography.labelSmall) } },
-            actions = { TextButton(onClick = { scope.launch { Datos.cargar(ctx, red = true) } }) { Text("Actualizar", color = Color.White) } },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = Verde, titleContentColor = Color.White),
+            title = { Column {
+                Text("LA QUINIELA", fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
+                Text("APUESTAS DEPORTIVAS · $estado".uppercase(), style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+            } },
+            actions = { TextButton(onClick = { scope.launch { Datos.cargar(ctx, red = true) } }) { Text("ACTUALIZAR", color = Papel) } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = Tinta, titleContentColor = Papel),
         )
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            TabRow(selectedTabIndex = tab) {
-                listOf("Generador", "Estadística", "Histórico").forEachIndexed { i, t ->
-                    Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t, fontSize = 12.sp) })
+            TabRow(selectedTabIndex = tab, containerColor = PapelOscuro, contentColor = Tinta) {
+                listOf("GENERADOR", "ESTADÍSTICA", "HISTÓRICO").forEachIndexed { i, t ->
+                    Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t, fontSize = 12.sp, letterSpacing = 1.sp) })
                 }
             }
             val b = base
@@ -213,7 +216,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
                     }
                     if (p != null) {
                         Text("Local: ${p.formaLocal?.toCharArray()?.joinToString(" ") ?: "sin datos"}   ·   Visitante: ${p.formaVisit?.toCharArray()?.joinToString(" ") ?: "sin datos"}",
-                            style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                            style = MaterialTheme.typography.bodySmall, fontFamily = Maquina)
                         Text("1 ${pct(p.p[0])} · X ${pct(p.p[1])} · 2 ${pct(p.p[2])}   (${p.nota}; casos ${p.nLocal}/${p.nVisit})",
                             style = MaterialTheme.typography.bodySmall)
                         val bio = bios.getOrNull(i)
@@ -265,7 +268,7 @@ private fun CasosLista(b: Base, equipo: String, patron: String, casa: Boolean, f
         Text("Los más recientes:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
         casos.take(12).forEach { c ->
             Text("${c.fecha.substring(8, 10)}/${c.fecha.substring(5, 7)}/${c.fecha.take(4)} · ${c.equipo} ${if (c.casa) "vs" else "en"} ${c.rival} ${c.gf}-${c.gc} → ${c.res}",
-                style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                style = MaterialTheme.typography.labelSmall, fontFamily = Maquina)
         }
     }
 }
@@ -277,6 +280,7 @@ private fun GeneradorVista(b: Base, sel: Sel) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var calculando by remember { mutableStateOf(false) }
+    var verBoleto by remember { mutableStateOf(true) }
     val est = b.estadistica
     val prox = b.proximas.getOrNull(sel.jornada)
     val pr = remember(prox, sel.k, b) { prox?.let { pronosticos(b, it, sel.k) }.orEmpty() }
@@ -414,7 +418,18 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                     }
                 }
             }
-            items(g.columnas.take(500).withIndex().toList()) { (n, c) ->
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = verBoleto, onClick = { verBoleto = true }, label = { Text("Boleto") })
+                    FilterChip(selected = !verBoleto, onClick = { verBoleto = false }, label = { Text("Lista por máscara") })
+                }
+            }
+            if (verBoleto) {
+                val bloques = g.columnas.take(400).toList().chunked(8)
+                items(bloques.size) { k ->
+                    Boleto(k + 1, k * 8 + 1, prox?.partidos.orEmpty(), bloques[k], prox?.jornada)
+                }
+            } else items(g.columnas.take(500).withIndex().toList()) { (n, c) ->
                 val t = Generador.texto(c)
                 val m = Mascara.de(t)
                 val prev = if (n > 0) Mascara.de(Generador.texto(g.columnas[n - 1])) else null
@@ -423,7 +438,7 @@ private fun GeneradorVista(b: Base, sel: Sel) {
                     fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
                 Row(Modifier.fillMaxWidth()) {
                     Text("${n + 1}.", Modifier.width(48.dp), style = MaterialTheme.typography.bodySmall)
-                    Text(t.chunked(1).joinToString(" "), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text(t.chunked(1).joinToString(" "), fontFamily = Maquina, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     Text(Mascara.de(t).toString(), style = MaterialTheme.typography.labelSmall)
                 }
             }
@@ -470,7 +485,7 @@ private fun EstadisticaVista(b: Base) {
                 e.mascaras.take(40).forEach { (m, n) ->
                     acc += n
                     Row {
-                        Text(m.toString(), Modifier.width(70.dp), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+                        Text(m.toString(), Modifier.width(70.dp), fontFamily = Maquina, fontWeight = FontWeight.SemiBold)
                         Text("$n veces · ${dec(n * 100.0 / e.total, 1)} %", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         Text("acumulado ${dec(acc * 100.0 / e.total, 0)} %", style = MaterialTheme.typography.labelSmall)
                     }
@@ -482,7 +497,7 @@ private fun EstadisticaVista(b: Base) {
                 Column(Modifier.padding(12.dp)) {
                     Text("Por posición del partido (% de 1 · X · 2)", fontWeight = FontWeight.Bold)
                     for (p in 0 until 14) Text("${p + 1}: ${dec(e.porPosicion[p][0], 0)} · ${dec(e.porPosicion[p][1], 0)} · ${dec(e.porPosicion[p][2], 0)}",
-                        style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        style = MaterialTheme.typography.bodySmall, fontFamily = Maquina)
                 }
             }
         }
@@ -512,7 +527,7 @@ private fun HistoricoVista(b: Base) {
         items(b.quinielas.asReversed().take(400)) { q ->
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${q.fecha.substring(8, 10)}/${q.fecha.substring(5, 7)}/${q.fecha.take(4)}", Modifier.width(86.dp), style = MaterialTheme.typography.labelSmall)
-                Text(q.signos.chunked(1).joinToString(" "), fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f), fontSize = 13.sp)
+                Text(q.signos.chunked(1).joinToString(" "), fontFamily = Maquina, modifier = Modifier.weight(1f), fontSize = 13.sp)
                 Text(Mascara.de(q.signos).toString(), style = MaterialTheme.typography.labelSmall)
             }
         }
