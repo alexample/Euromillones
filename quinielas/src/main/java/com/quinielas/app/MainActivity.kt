@@ -82,6 +82,8 @@ private fun miles(n: Long) = "%,d".format(Locale.forLanguageTag("es-ES"), n)
 /** Estado compartido entre pestañas. */
 private class Sel {
     var jornada by mutableIntStateOf(-1)
+    var vista: Base? = null          // base sobre la que se eligió la jornada
+    var manual: Int? = null          // nº de quiniela elegido a mano
     var k by mutableIntStateOf(7)
     var umbral by mutableFloatStateOf(20f)
     var permitidos by mutableStateOf(IntArray(14) { 7 })
@@ -126,11 +128,12 @@ private fun App() {
             }
             val b = base
             if (b == null) { LinearProgressIndicator(Modifier.fillMaxWidth()); return@Column }
-            if (sel.jornada < 0 || sel.jornada >= b.proximas.size) {
-                // La siguiente jornada: la primera por jugar a partir de hoy
-                val hoy = java.time.LocalDate.now().toString()
-                sel.jornada = b.proximas.indexOfFirst { it.pendiente && it.fecha >= hoy }.takeIf { it >= 0 }
-                    ?: b.proximas.indexOfFirst { it.pendiente }.takeIf { it >= 0 } ?: (b.proximas.size - 1)
+            if (sel.vista !== b) {
+                // Datos nuevos: se vuelve a elegir por nº de quiniela, no por posición
+                sel.vista = b
+                val m = sel.manual?.let { n -> b.proximas.indexOfFirst { it.numero == n } }?.takeIf { it >= 0 }
+                val nueva = m ?: siguienteJornada(b.proximas)
+                if (nueva != sel.jornada) { sel.jornada = nueva; sel.editado = false; sel.resultado = null }
             }
             if (sel.mascaras == null) sel.mascaras = b.estadistica.masFrecuentes(sel.cobertura.toDouble())
             when (tab) {
@@ -143,6 +146,17 @@ private fun App() {
 }
 
 // ============================================================ JORNADA
+
+/** La próxima jornada: la primera que aún no ha empezado; si no hay, la primera con partidos por jugar. */
+private fun siguienteJornada(l: List<Prox>): Int {
+    val hoy = java.time.LocalDate.now().toString()
+    fun inicio(p: Prox) = p.partidos.mapNotNull { it.fecha.take(10).ifEmpty { null } }.minOrNull() ?: p.fecha
+    return l.indexOfFirst { it.pendiente && it.partidos.all { x -> x.marcador.isBlank() } && inicio(it) >= hoy }.takeIf { it >= 0 }
+        ?: l.indexOfFirst { it.pendiente }.takeIf { it >= 0 } ?: (l.size - 1)
+}
+
+/** ¿Falta por publicar la siguiente quiniela? (todas las conocidas ya han empezado) */
+private fun faltaSiguiente(l: List<Prox>): Boolean = l.none { it.pendiente && it.partidos.all { x -> x.marcador.isBlank() } }
 
 private fun pronosticos(b: Base, p: Prox, k: Int): List<Pronostico> = p.partidos.map { x ->
     val f = x.fecha.take(10).ifEmpty { p.fecha }
@@ -181,10 +195,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.jornadaItems(b: Base,
             Text("Jornada", fontWeight = FontWeight.Bold)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 b.proximas.forEachIndexed { i, x ->
-                    FilterChip(selected = sel.jornada == i, onClick = { sel.jornada = i; sel.editado = false; sel.resultado = null },
+                    FilterChip(selected = sel.jornada == i, onClick = { sel.jornada = i; sel.manual = x.numero; sel.editado = false; sel.resultado = null },
                         label = { Text("Nº ${x.numero} · ${x.fecha.substring(8, 10)}/${x.fecha.substring(5, 7)}" + if (x.pendiente) "" else " ✓") })
                 }
             }
+            if (faltaSiguiente(b.proximas)) Text("La quiniela nº ${(b.proximas.maxOfOrNull { it.numero } ?: 0) + 1} todavía no la ha publicado Loterías " +
+                "(suele salir al acabar la jornada intersemanal). Los datos se revisan cada 2 h; pulsa ACTUALIZAR." +
+                (b.actualizado.takeIf { it.length >= 16 }?.let { " Última revisión: ${it.substring(8, 10)}/${it.substring(5, 7)} ${it.substring(11, 16)} UTC." } ?: ""),
+                style = MaterialTheme.typography.bodySmall, color = Tinta)
             Text("Quiniela nº ${prox.numero}" + (prox.jornada?.let { " (jornada $it)" } ?: "") + " del ${prox.fecha.substring(8, 10)}/${prox.fecha.substring(5, 7)}" +
                 if (prox.pendiente) "" else " · ya jugada", style = MaterialTheme.typography.bodySmall)
         }

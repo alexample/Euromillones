@@ -3,7 +3,7 @@ name: Datos quinielas
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 6,22 * * *"
+    - cron: "17 */2 * * *"
   push:
     paths: [scripts/build_quinielas.py]
 
